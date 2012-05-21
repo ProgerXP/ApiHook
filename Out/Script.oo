@@ -1,0 +1,4 @@
+; This is a sample ApiHook script file.
+; http://proger.i-forge.net/ApiHook
+[CreateFileW]
+  log Opening :fn.
