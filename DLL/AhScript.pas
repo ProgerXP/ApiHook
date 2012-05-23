@@ -12,6 +12,7 @@ type
 
   TAhRunPhase = (raPre, raPost);
   TAhRunPhases = set of TAhRunPhase;
+  THookMode = (hmPrologue, hmImport);
 
   TAhGetRegister = function (Reg: String; out Value: DWord): Boolean of object;
   TAhGetArg = function (Arg: String): TRpnScalar of object;
@@ -44,13 +45,16 @@ type
   end;
 
   TAhScriptProc = class
-  protected
+  protected                                       
+    FHookMode: THookMode;
     FActions: TObjectList;  // of TAhAction.
 
     function GetAction(Index: Integer): TAhAction;
   public
     constructor Create;
     destructor Destroy; override;
+
+    property HookMode: THookMode read FHookMode write FHookMode default hmPrologue;
 
     function ActionCount: Integer;
     property Actions[Index: Integer]: TAhAction read GetAction;
@@ -63,7 +67,7 @@ type
   TAhScript = class
   protected                                            
     FConsts: TAhConstants;
-    FProcs: TObjectHash;      // of TAhScriptProc.     
+    FProcs: TObjectHash;      // of TAhScriptProc.
     FRpnSettings: TRpnCompSettings;
 
     FParseConsts: Boolean;    // used by ParseLine.
@@ -341,6 +345,16 @@ var
   end;
 
   function GetArg: WideString;
+    function GetRegOrArg(const Name: WideString): TRpnScalar;
+    var
+      Reg: DWord;
+    begin
+      if Context.GetRegister(Name, Reg) then
+        Result := RpnNum(Reg)
+        else
+          Result := Context.GetArg(Name);
+    end;
+
   var
     IsEsc: Boolean;
     Fmt: WideString;
@@ -381,7 +395,7 @@ var
 
       if Split(Result, ' ', Result, Fmt) then
         if (Length(Fmt) = 1) and (Char(Fmt[1]) in ['d', 'x', 'X', 'f', 's', 'u']) then
-          Result := AhFormatOne(Context.GetArg(Result), Char(Fmt[1]))
+          Result := AhFormatOne(GetRegOrArg(Result), Char(Fmt[1]))
           else
             Result := RpnValueToStr( AhEvalRPN(Context, ':' + Result + ' ' + Fmt, Settings), NilRPN )
         else if UpperCase(Result) = Result then
@@ -889,11 +903,27 @@ end;
 procedure TAhScript.CleanProcs;
 var
   I: Integer;
+
+  function SetOptions: Boolean;
+  begin
+    Result := True;
+
+    case Char(FProcs.Strings[I][ Length(FProcs.Strings[I]) ]) of
+    '*':    (FProcs.Objects[I] as TAhScriptProc).HookMode := hmImport
+    else
+      Result := False;
+    end;
+  end;
+
 begin
   for I := FProcs.Count - 1 downto 0 do
-    if (FProcs.Strings[I] = '') or not (Char(FProcs.Strings[I][1]) in ['a'..'z', 'A'..'Z', '0'..'9', '_'] )
-       or (( FProcs.Objects[I] as TAhScriptProc ).ActionCount = 0) then
-      FProcs.Delete(I);
+    if FProcs.Strings[I] = '' then
+      FProcs.Delete(I)
+      else if SetOptions then
+        FProcs.Strings[I] := Copy(FProcs.Strings[I], 1, Length(FProcs.Strings[I]) - 1)
+        else if not (Char(FProcs.Strings[I][1]) in ['a'..'z', 'A'..'Z', '0'..'9', '_'] )
+                or (( FProcs.Objects[I] as TAhScriptProc ).ActionCount = 0) then
+          FProcs.Delete(I);
 end;
 
 function TAhScript.ProcCount: Integer;
@@ -943,6 +973,7 @@ end;
 
 constructor TAhScriptProc.Create;
 begin
+  FHookMode := hmPrologue;
   FActions := TObjectList.Create(True);
 end;
 

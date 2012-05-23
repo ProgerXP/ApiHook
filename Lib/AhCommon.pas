@@ -259,14 +259,16 @@ var
 
   function FindFmtEnd: Integer;
   const
-    FmtChars = ['.', '-', '0'..'9', 'd', 'u', 'e', 'f', 'g', 'n', 'm', 'p', 's', 'x'];
+    FmtMods = ['.', '-', '0'..'9'];
+    FmtEnds = ['d', 'u', 'e', 'f', 'g', 'n', 'm', 'p', 's', 'x'];
   begin
     for Result := 1 to Length(Rest) do
-      if not (Char(Rest[Result]) in FmtChars) and
-         not ((Chr(Ord(Char(Rest[Result])) + 32 {lower case})) in FmtChars) then
-        Exit;
+      if not (Char(Rest[Result]) in FmtMods) then
+        Break;
 
-    Result := Length(Rest) + 1;
+    if (Char(Rest[Result]) in FmtEnds) or
+       ((Chr(Ord(Char(Rest[Result])) + 32 {lower case})) in FmtEnds) then
+      Inc(Result);
   end;
 
 begin

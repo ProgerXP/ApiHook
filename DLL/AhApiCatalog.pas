@@ -44,6 +44,7 @@ type
   TApiProcInfo = class
   public
     Lib, Call: String;
+    PrologueLength: Integer;
     Return: TApiParamKind;
     ReturnHint: WideString;
   end;
@@ -244,6 +245,9 @@ end;
 
     Result.Lib := List.Values['Lib'];
     Result.Call := List.Values['Call'];
+
+    if not TryStrToInt(List.Values['Prologue'], Result.PrologueLength) then
+      Result.PrologueLength := 0; 
 
     Result.Return := TApiParams.StrToKindHinting( List.Values['Return'], Result.ReturnHint );
   end;

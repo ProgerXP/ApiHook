@@ -15,6 +15,12 @@ type
     Index: Integer;
     Proc: String;
 
+    Mode: THookMode;
+
+    PrologueLength: Byte;
+    VarPrologue: array[0..127] of Byte;
+    VarProloguePtr: Pointer;
+
     CritSectionInitialized: Integer;
     CritSection: TRTLCriticalSection;
     Context: TAhHookedContext;    // NIL when hook isn't executing.
@@ -199,6 +205,20 @@ begin
   Patch(Hook.NewPrologue[NewPrologueTplAddr], DWord(@Hook.Jumper[0]));
 end;
 
+procedure FillVarPrologueOf(var Hook: TProcHook);    
+var
+  ContinuationAddr: DWord;
+begin
+  with Hook do
+  begin
+    PatchCopying(@VarPrologue[0], OrigAddr, PrologueLength);
+    PatchCopying(@VarPrologue[PrologueLength], @NewPrologueTpl[0], SizeOf(NewPrologueTpl));
+
+    ContinuationAddr := DWord(OrigAddr) + PrologueLength;
+    PatchCopying(@VarPrologue[PrologueLength + NewPrologueTplAddr], @ContinuationAddr, SizeOf(DWord));
+  end;
+end;
+
 procedure FillJumperOf(var Hook: TProcHook);
 begin
   with Hook do
@@ -211,7 +231,14 @@ begin
     Patch(Jumper[JumperTplSlot1], DWord(SlotAddr));
     Patch(Jumper[JumperTplSlot2], DWord(SlotAddr));
 
-    Patch(Jumper[JumperTplOrig], DWord(@OrigAddr));   // they're @pointers to proc pointers.
+    if PrologueLength = 0 then
+      Patch(Jumper[JumperTplOrig], DWord(@OrigAddr))   // they're @pointers to proc pointers.
+      else
+      begin
+        VarProloguePtr := @VarPrologue[0];
+        Patch(Jumper[JumperTplOrig], DWord(@VarProloguePtr));
+      end;
+
     Patch(Jumper[JumperTplPreHook], DWord(@PreHookAddr));
     Patch(Jumper[JumperTplPostHook], DWord(@PostHookAddr));
   end;
@@ -530,7 +557,7 @@ procedure DoPreHook(const Registers: TAhRegisters; Index: Integer); stdcall; for
 procedure DoPostHook(var Registers: TAhRegisters; Index: Integer); stdcall; forward;
 
 procedure CaptureRegisters;
-asm                              
+asm
   PUSH  EAX
   MOV   EAX, [ESP + RegistersSize + $10]
   MOV   TAhRegisters[ESP+8].rEIP, EAX
@@ -569,10 +596,10 @@ asm
 
   ADD   ESP, RegistersSize
   RET   4
-end;        
+end;
 
 procedure PostHook;
-asm               
+asm
   { Input:  ESP+4 - proc hook index }
 
   SUB   ESP, RegistersSize
@@ -581,7 +608,7 @@ asm
   PUSH  EAX
   PUSH  ECX
   MOV   ECX, [ESP + RegistersSize + $0C]
-                        
+
   PUSH  ECX
   LEA   EAX, [ESP + $0C]
   PUSH  EAX
@@ -599,18 +626,19 @@ var
   Count: Integer;
 begin
   if not CheckProcHookIndex('PreHook', Index) then
-    Exit;                                                
+    Exit;
 
   with ProcHooks[Index] do
-  begin                                  
+  begin
     if LLUseCritSect then
     begin
       if InterlockedExchange(CritSectionInitialized, 1) = 0 then
         InitializeCriticalSection(CritSection);
       EnterCriticalSection(CritSection);
     end;
-                                                         
-    PatchCopying(OrigAddr, @OrigPrologue[0], SizeOf(TPrologue));
+
+    if (Mode = hmPrologue) and (PrologueLength = 0) then
+      PatchCopying(OrigAddr, @OrigPrologue[0], SizeOf(TPrologue));
 
     if SkipHookedCaller(Registers.rEIP) then
       Exit;
@@ -638,14 +666,14 @@ procedure DoPostHook(var Registers: TAhRegisters; Index: Integer); stdcall;
 
 var
   Count: Integer;
-begin                                 
-  if not CheckProcHookIndex('PostHook', Index) or
-     ((ProcHooks[Index].Context = NIL) and LLErr('PostHook(%d) called with NIL Context.', [Index])) then
+begin                       
+  if not CheckProcHookIndex('PostHook', Index) then
     Exit;
 
   with ProcHooks[Index] do
   begin
-    PatchCopying(OrigAddr, @NewPrologue[0], SizeOf(TPrologue));
+    if (Mode = hmPrologue) and (PrologueLength = 0) then
+      PatchCopying(OrigAddr, @NewPrologue[0], SizeOf(TPrologue));
 
     try
       // orig addr written at slot pointed to by [JumperTplSlot1]:
@@ -656,12 +684,13 @@ begin
       Exit;
     end;
 
-    if SkipHookedCaller(Registers.rEIP) then
+    if SkipHookedCaller(Registers.rEIP) or
+       ( (ProcHooks[Index].Context = NIL) and LLErr('PostHook(%d) called with NIL Context.', [Index]) ) then
     begin
       PrepareLeave;
       Exit;
     end;
-                   
+
     LLDbg('POST HOOK (index %d = %s)', [Index, Proc]);
 
     Context.IsAfterCall := True;
@@ -681,10 +710,49 @@ begin
   PrepareLeave;
 end;
 
+function HookPrologueProc(var Hook: TProcHook): Boolean;
+const
+  VpError = 'VirtualProtect(proc = %s, addr = %.8X, size = %d, PAGE_READWRITE) has failed.';
+begin
+  Result := False;
+
+  with Hook do
+  begin
+    if not VirtualProtect(OrigAddr, SizeOf(TPrologue), PAGE_READWRITE, @OldPageMode)
+       and LLErr(VpError, [Proc, DWord(OrigAddr), SizeOf(TPrologue)]) then
+      Exit;
+
+    if PrologueLength = 0 then
+      PatchCopying(@OrigPrologue[0], OrigAddr, SizeOf(TPrologue))
+      else
+        FillVarPrologueOf(Hook);
+
+    PatchCopying(OrigAddr, @NewPrologue[0], SizeOf(TPrologue));
+
+    { We don't undo VirtualProtect because OrigAddr will be constantly rewritten by Pre/PostHook. }
+
+    LLDbg('Assigned proc hook ID %d; patched prologue at %.8X (OrigAddr), points to jumper at %.8X.',
+          [ProcHookCount, DWord(OrigAddr), DWord(@Jumper[0])]);
+  end;
+  
+  Result := True;
+end;        
+
+function HookImportProc(var Hook: TProcHook): Boolean;
+begin
+  {$IFDEF AhDebug}
+    Result := PatchImport(Hook.OrigAddr, @Hook.Jumper[0], SelfImageBase);
+  {$ELSE}
+    Result := PatchImport(Hook.OrigAddr, @Hook.Jumper[0]);
+  {$ENDIF}
+
+  if Result then
+    LLDbg('Assigned proc hook ID %d; patched Import Table.', [ProcHookCount]);
+end;
+
 function HookProc(const ProcName: String): Boolean;
 const
   GetAddrError = 'GetProcAddress(%s, %s) has failed.';
-  VpError = 'VirtualProtect(proc = %s, addr = %.8X, size = %d, PAGE_READWRITE) has failed.';
 var
   Lib: PChar;
   Addr: Pointer;
@@ -714,8 +782,10 @@ begin
   with ProcHooks[ProcHookCount] do
   begin
     Index := ProcHookCount;
-
     Proc := ProcName;
+
+    Mode := Script[ Script.IndexOfProc(ProcName) ].HookMode;
+    PrologueLength := Procs[ProcName].PrologueLength;
 
     OrigAddr := Addr;
     SlotAddr := @Jumper[ Length(Jumper) - SizeOf(DWord) ];
@@ -723,24 +793,17 @@ begin
     FillNewPrologueOf( ProcHooks[ProcHookCount] );
     FillJumperOf( ProcHooks[ProcHookCount] );
 
-    if not VirtualProtect(OrigAddr, SizeOf(TPrologue), PAGE_READWRITE, @OldPageMode)
-       and LLErr(VpError, [ProcName, DWord(OrigAddr), SizeOf(TPrologue)]) then
-      Exit;
-
-    PatchCopying(@OrigPrologue[0], OrigAddr, SizeOf(TPrologue));
-    PatchCopying(OrigAddr, @NewPrologue[0], SizeOf(TPrologue));
-
-    { We don't undo VirtualProtect because OrigAddr will be constantly rewritten by Pre/PostHook. }
-    
-    LLDbg('Assigned proc hook ID %d; patched prologue at %.8X (OrigAddr), points to jumper at %.8X.',
-          [ProcHookCount, DWord(OrigAddr), DWord(@Jumper[0])]);
+    if Mode = hmPrologue then
+      Result := HookPrologueProc( ProcHooks[ProcHookCount] )
+      else
+        Result := HookImportProc( ProcHooks[ProcHookCount] );
   end;
 
-  Result := True;
-  Inc(ProcHookCount);
+  if Result then
+    Inc(ProcHookCount);
 end;
 
-function UnhookProc(var Hook: TProcHook): Boolean;
+function UnhookPrologueProc(var Hook: TProcHook): Boolean;
   function RestorePrologue: Boolean;
   begin
     Result := False;
@@ -786,6 +849,25 @@ begin
   if not VirtualProtect(Hook.OrigAddr, SizeOf(TPrologue), Hook.OldPageMode, @Hook.OldPageMode)
      and LLErr('Cannot undo VirtualProtect''ion of %s at address %.8X.', [Hook.Proc, DWord(Hook.OrigAddr)]) then
     Result := False;
+end;           
+
+function UnhookImportProc(var Hook: TProcHook): Boolean;
+begin
+  LLDbg('Restoring Import Table record of %s from %.8X (Jumper) -> %.8X (OrigAddr)...',
+        [Hook.Proc, DWord(@Hook.Jumper[0]), DWord(Hook.OrigAddr)]);
+
+  Result := PatchImport(@Hook.Jumper[0], Hook.OrigAddr);
+
+  if not Result then
+    LLDbg('Could not restore the Import Table record!', []);
+end;
+                    
+function UnhookProc(var Hook: TProcHook): Boolean;
+begin
+  if Hook.Mode = hmPrologue then
+    Result := UnhookPrologueProc(Hook)
+    else
+      Result := UnhookImportProc(Hook);
 end;
 
 { Exports }
