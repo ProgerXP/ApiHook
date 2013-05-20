@@ -7,13 +7,15 @@ uses Windows, SysUtils, Contnrs, CLasses, IniFilesW, StringsW, FileStreamW,
 
 type
   TRpnScalar = RPNit.TRpnScalar;
-  TAhLogLevel = (logDebug, logInfo, logUser, logError);
+  TAhLogLevel = (logDebug, logInfo, logUser, logError);  
+  TAhCritSectionMode = (csNone, csPerProc, csGlobal);
 
   AhEx = class (Exception);
   EPipeIsClosing = class (AhEx);
 
   TAhSettings = record
-    UseCriticalSections: Boolean;
+    UseCriticalSections: TAhCritSectionMode;
+    HookModule: array[0..255] of WideChar;
     UseThreads: Boolean;
     Pipe: array[0..255] of Char;
   end;
@@ -126,7 +128,7 @@ type
   end;
 
 const
-  AhVersion   = $0052;
+  AhVersion   = $0054;
   AhHomePage  = 'http://proger.i-forge.net/ApiHook';
 
   NilRPN      = '<NIL>';
@@ -144,7 +146,8 @@ function LogLevelToPrefix(Level: TAhLogLevel): WideString;
 function LogLevelToChar(Level: TAhLogLevel): Char;
 function ExtractLogLevelFrom(var FN: WideString): WideString;
 
-function AhSettings(UseCriticalSections, UseThreads: Boolean; const Pipe: String): TAhSettings;
+function AhSettings(UseCriticalSections: TAhCritSectionMode; UseThreads: Boolean; const Pipe: String;
+  const HookModule: WideString = ''): TAhSettings;
 function InlineAhScriptToFull(Script: WideString): WideString;
 
 // replaces '$' in Msg with each item from Fmt; replaces '$$' with '$'.
@@ -196,13 +199,15 @@ begin
       Result := Copy(Levels, Level, MaxInt);
 end;
 
-function AhSettings(UseCriticalSections, UseThreads: Boolean; const Pipe: String): TAhSettings;
+function AhSettings(UseCriticalSections: TAhCritSectionMode; UseThreads: Boolean; const Pipe: String;
+  const HookModule: WideString = ''): TAhSettings;
 begin
   ZeroMemory(@Result, SizeOf(Result));
 
   Result.UseCriticalSections := UseCriticalSections;
   Result.UseThreads := UseThreads;
   Move(Pipe[1], Result.Pipe[0], Length(Pipe));
+  Move(HookModule[1], Result.HookModule[0], Length(HookModule) * 2);
 end;
 
 function InlineAhScriptToFull(Script: WideString): WideString;

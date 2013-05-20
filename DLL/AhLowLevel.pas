@@ -9,7 +9,7 @@ type
   TAhHookedContext  = class;
 
   TPrologue         = array[0..5] of Byte;
-  TJumper           = array[0..49] of byte;
+  TJumper           = array[0..97] of byte;
 
   TProcHook = record
     Index: Integer;
@@ -70,13 +70,13 @@ type
   end;
 
 var
-  LLUseCritSect: Boolean = False;
+  LLUseCritSect: TAhCritSectionMode = csGlobal;
   LLOnLog: TAhOnLog = NIL;
   LLOnScriptLog: TAhOnLog = NIL;
   LLUserFilePath: WideString = 'User\';
 
 // owns AScript and ACatalog.
-procedure InitLowLevel(AScript: TAhScript; ACatalog: TAhApiCatalog);
+procedure InitLowLevel(AScript: TAhScript; ACatalog: TAhApiCatalog; const HookImageName: WideString);
 procedure ResetLowLevel;
 function IsLowLevelInit: Boolean;
 
@@ -98,41 +98,76 @@ const
 
   JumperTpl: TJumper = (
     {PUSH   index}              $68,        0, 0, 0, 0,   {index}
-    {CALL   prehook}            $FF, $15,   0, 0, 0, 0,   {PreHookAddr}
+    {CALL   prehook}            $FF, $15,   0, 0, 0, 0,   {PreHookAddr}     
+
+  {$IFDEF 0}
+    {INT    3 (debugger)}       $CD, $03,
+  {$ELSE}
+    {NOP, NOP}                  $90, $90,
+  {$ENDIF}
 
     {PUSH   EAX}                $50,
     {MOV    EAX, origRetAddr}   $8B, $44, $24,     $04,   // [ESP+4]
-    {MOV    slot, EAX}          $A3,        0, 0, 0, 0,   {slot}
+
+    {MOV    slot, EAX}          $89, $84, $24,
+                                     $01, $F0, $FF, $FF,  // [ESP-0x3FF]
+                                $C6, $84, $24,
+                                     $00, $F0, $FF, $FF, $68,
+
+                                $C7, $84, $24,
+                                     $06, $F0, $FF, $FF,
+                                     0, 0, 0, 0,
+                                $C6, $84, $24,
+                                     $05, $F0, $FF, $FF, $68,
+
+                                $C6, $84, $24,
+                                     $0A, $F0, $FF, $FF, $C3,
+
+                                $8D, $84, $24,
+                                     $00, $F0, $FF, $FF,
+                                $89, $44, $24,
+                                     $04,
+//    {MOV    slot, EAX}          $A3,        0, 0, 0, 0,   {slot}
     {POP    EAX}                $58,
 
-    {POP    EAX}                $58,                      // original caller's return address
-    {CALL   orig}               $FF, $15,   0, 0, 0, 0,   {orig}
+//    {POP    EAX}                $58,                      // original caller's return address
+//    {CALL   orig}               $FF, $15,   0, 0, 0, 0,   {orig}
+                                $FF, $35,   0, 0, 0, 0,
+                                $C3,
 
     {PUSH   index}              $68,        0, 0, 0, 0,   {index}
     {CALL   posthook}           $FF, $15,   0, 0, 0, 0,   {PostHookAddr}
 
-    {JMP    slot}               $FF, $25,   0, 0, 0, 0,   {slot}
-    {DD     slot}               {DD}        0, 0, 0, 0    // temp, used above
+//    {JMP    slot}               $FF, $25,   0, 0, 0, 0,   {slot}
+//    {DD     slot}               {DD}        0, 0, 0, 0    // temp, used above
+    $C3,
+    {JMP    slot}               $FF, $A4, $24,
+                                     $00, $F0, $FF, $FF   // [ESP-0x400]
   );
 
   JumperTplIndex1    = 1;
   JumperTplPreHook   = JumperTplIndex1 + 6;
   JumperTplSlot1     = JumperTplPreHook + 10;
-  JumperTplOrig      = JumperTplSlot1 + 8;
-  JumperTplIndex2    = JumperTplOrig + 5;
+  JumperTplContSlot  = JumperTplPreHook + 33;
+  JumperTplOrig      = JumperTplPreHook + 67;//JumperTplSlot1 + 8 + 2;
+  JumperTplContAt    = JumperTplOrig + 5;
+  JumperTplIndex2    = JumperTplOrig + 5 + 1;
   JumperTplPostHook  = JumperTplIndex2 + 6;
   JumperTplSlot2     = JumperTplPostHook + 6;
 
 var                 
   Procs: TAhApiCatalog = NIL;
   Script: TAhScript = NIL;
-  GlobalSaved: TObjectHash = NIL;
+  GlobalSaved: TObjectHash = NIL;     
+  GlobalCritSection: TRTLCriticalSection;
 
   ProcHooks: array of TProcHook;
   ProcHookCount: Integer = 0;
 
   PreHookAddr, PostHookAddr: Pointer;
   SelfImageBase, SelfImageEnd: DWord;
+  // if HookImageEnd = 0 only ApiHook.dll's callers are bypassed.
+  HookImageBase, HookImageEnd: DWord;
 
   ProcModules: TProcessModules;
 
@@ -145,7 +180,7 @@ begin
   if Assigned(LLOnLog) then
     LLOnLog(logError, Str, Fmt);
 end;
-         
+
 procedure LLHookRunningError(When, Proc: WideString; E: Exception);
 const
   Fmt = 'Error while running %s-actions of %s (library image = %.8X..%.8X): <%s at %.8X> %s';
@@ -205,7 +240,7 @@ begin
   Patch(Hook.NewPrologue[NewPrologueTplAddr], DWord(@Hook.Jumper[0]));
 end;
 
-procedure FillVarPrologueOf(var Hook: TProcHook);    
+procedure FillVarPrologueOf(var Hook: TProcHook);
 var
   ContinuationAddr: DWord;
 begin
@@ -228,10 +263,12 @@ begin
     Patch(Jumper[JumperTplIndex1], Index);
     Patch(Jumper[JumperTplIndex2], Index);
 
-    Patch(Jumper[JumperTplSlot1], DWord(SlotAddr));
-    Patch(Jumper[JumperTplSlot2], DWord(SlotAddr));
+//    Patch(Jumper[JumperTplSlot1], DWord(SlotAddr));
+//    Patch(Jumper[JumperTplSlot2], DWord(SlotAddr));
 
-    if PrologueLength = 0 then
+    Patch(Jumper[JumperTplContSlot], DWord(@Jumper[JumperTplContAt]));
+
+    if (Mode <> hmPrologue) or (PrologueLength = 0) then
       Patch(Jumper[JumperTplOrig], DWord(@OrigAddr))   // they're @pointers to proc pointers.
       else
       begin
@@ -249,7 +286,10 @@ begin
   {$IFDEF AhDebug}
     Result := False;
   {$ELSE}
-    Result := (Addr >= SelfImageBase) and (Addr <= SelfImageEnd);
+    if HookImageEnd = 0 then
+      Result := (Addr >= SelfImageBase) and (Addr <= SelfImageEnd)
+      else
+        Result := (Addr < HookImageBase) or (Addr > HookImageEnd);
   {$ENDIF}
 end;
 
@@ -554,7 +594,7 @@ end;
 { Hooking routines }
 
 procedure DoPreHook(const Registers: TAhRegisters; Index: Integer); stdcall; forward;
-procedure DoPostHook(var Registers: TAhRegisters; Index: Integer); stdcall; forward;
+procedure DoPostHook(var Registers: TAhRegisters; Index: Integer; Caller: Pointer); stdcall; forward;
 
 procedure CaptureRegisters;
 asm
@@ -585,7 +625,7 @@ asm
   PUSH  EAX
   PUSH  ECX
   MOV   ECX, [ESP + RegistersSize + $0C]
-                        
+
   PUSH  ECX
   LEA   EAX, [ESP + $0C]
   PUSH  EAX
@@ -601,16 +641,19 @@ end;
 procedure PostHook;
 asm
   { Input:  ESP+4 - proc hook index }
+  {         ESP+8 - original caller }
 
   SUB   ESP, RegistersSize
   CALL  CaptureRegisters
 
   PUSH  EAX
   PUSH  ECX
-  MOV   ECX, [ESP + RegistersSize + $0C]
-
+                                        
+  MOV   ECX, [ESP + RegistersSize + $10]
   PUSH  ECX
-  LEA   EAX, [ESP + $0C]
+  MOV   ECX, [ESP + RegistersSize + $10]
+  PUSH  ECX
+  LEA   EAX, [ESP + $10]
   PUSH  EAX
   CALL  DoPostHook
 
@@ -624,17 +667,24 @@ end;
 procedure DoPreHook(const Registers: TAhRegisters; Index: Integer); stdcall;
 var
   Count: Integer;
-begin
-  if not CheckProcHookIndex('PreHook', Index) then
-    Exit;
-
+begin         
   with ProcHooks[Index] do
   begin
-    if LLUseCritSect then
-    begin
-      if InterlockedExchange(CritSectionInitialized, 1) = 0 then
-        InitializeCriticalSection(CritSection);
-      EnterCriticalSection(CritSection);
+    if not CheckProcHookIndex('PreHook', Index) or
+      // optimization to avoid entering critical section on local calls - without it and
+      // with loader <-> library pipe attached this will fail with AV rather quickly.
+      ( (Mode = hmPrologue) and (PrologueLength > 0) and SkipHookedCaller(Registers.rEIP) ) then
+      Exit;
+
+    case LLUseCritSect of
+    csGlobal:
+      EnterCriticalSection(GlobalCritSection);
+    csPerProc:
+      begin
+        if InterlockedExchange(CritSectionInitialized, 1) = 0 then
+          InitializeCriticalSection(CritSection);
+        EnterCriticalSection(CritSection);
+      end;
     end;
 
     if (Mode = hmPrologue) and (PrologueLength = 0) then
@@ -657,32 +707,28 @@ begin
   end;
 end;
 
-procedure DoPostHook(var Registers: TAhRegisters; Index: Integer); stdcall;     
+procedure DoPostHook(var Registers: TAhRegisters; Index: Integer; Caller: Pointer); stdcall;
   procedure PrepareLeave;
   begin
-    if LLUseCritSect then
-      LeaveCriticalSection(ProcHooks[Index].CritSection);
+    case LLUseCritSect of
+    csGlobal:   LeaveCriticalSection(GlobalCritSection);
+    csPerProc:  LeaveCriticalSection(ProcHooks[Index].CritSection);
+    end;
   end;
 
 var
   Count: Integer;
 begin                       
-  if not CheckProcHookIndex('PostHook', Index) then
-    Exit;
+  Registers.rEIP := DWord(Caller);
 
   with ProcHooks[Index] do
   begin
+    if not CheckProcHookIndex('PostHook', Index) or
+       ( (Mode = hmPrologue) and (PrologueLength > 0) and SkipHookedCaller(Registers.rEIP) ) then
+      Exit;
+
     if (Mode = hmPrologue) and (PrologueLength = 0) then
       PatchCopying(OrigAddr, @NewPrologue[0], SizeOf(TPrologue));
-
-    try
-      // orig addr written at slot pointed to by [JumperTplSlot1]:
-      Registers.rEIP := PDWord(PDWord( @Jumper[JumperTplSlot1] )^)^;
-    except
-      LLErr('Error retrieving caller''s address in PostHook(%d).', [Index]);
-      PrepareLeave;
-      Exit;
-    end;
 
     if SkipHookedCaller(Registers.rEIP) or
        ( (ProcHooks[Index].Context = NIL) and LLErr('PostHook(%d) called with NIL Context.', [Index]) ) then
@@ -704,10 +750,11 @@ begin
           LLHookRunningError('post', Proc, E);
       end;
 
-    FreeAndNIL(Context);
+    FreeAndNIL(Context);               
+    PrepareLeave;
+
+    LLDbg('LEFT HOOK (index %d = %s)', [Index, Proc]);
   end;
-  
-  PrepareLeave;
 end;
 
 function HookPrologueProc(var Hook: TProcHook): Boolean;
@@ -822,28 +869,41 @@ function UnhookPrologueProc(var Hook: TProcHook): Boolean;
         LLErr('Exception while restoring prologue at %.8X - <%s> %s', [DWord(Hook.OrigAddr), E.ClassName, E.Message]);
     end;
   end;
-                                     
+
 begin
   LLDbg('Unhooking %s at %.8X (OrigAddr)...', [Hook.Proc, DWord(Hook.OrigAddr)]);
   Result := True;
 
-  if LLUseCritSect and (Hook.CritSectionInitialized > 0) then
-  begin
-    EnterCriticalSection(Hook.CritSection);
-    // restoring again in case PostHook has just written NewPrologue after executing:
+  case LLUseCritSect of
+  csNone:
     Result := RestorePrologue and Result;
 
-    LeaveCriticalSection(Hook.CritSection);
-    DeleteCriticalSection(Hook.CritSection);
-  end
-    else
+  csGlobal:
+    begin
+      EnterCriticalSection(GlobalCritSection);
+      Result := RestorePrologue and Result;
+      LeaveCriticalSection(GlobalCritSection);
+    end;
+
+  csPerProc:
+    begin
+      EnterCriticalSection(Hook.CritSection);
+      // restoring again in case PostHook has just written NewPrologue after executing:
       Result := RestorePrologue and Result;
 
-  if (Hook.Context <> NIL)
-     and LLErr('Context of %s hook wasn''t NIL when unhooking.', [Hook.Proc]) then
+      LeaveCriticalSection(Hook.CritSection);
+      DeleteCriticalSection(Hook.CritSection);
+    end;
+  end;
+
+  if Hook.Context <> NIL then
   begin
+    LLErr('Context of %s hook wasn''t NIL when unhooking, IsAfterCall = %s.',
+          [Hook.Proc, BoolToStr(Hook.Context.IsAfterCall, True)]);
     Result := False;
-    Hook.Context.Free;
+    // letting it hang in there leaking memory but at least avoiding Access Violations
+    // and NIL refs when we deallocate the context in the middle of its actions running.
+//    Hook.Context.Free;
   end;
 
   if not VirtualProtect(Hook.OrigAddr, SizeOf(TPrologue), Hook.OldPageMode, @Hook.OldPageMode)
@@ -872,25 +932,60 @@ end;
 
 { Exports }
 
-procedure InitSelfData;
-const
-  Error = 'Error getting self module information using GetModuleInformation(): (%d) %s';
+procedure InitVars(const HookImageName: WideString);
+  procedure SetModuleInfo(const Caption: WideString; Handle: HModule; out Base, Finish: DWord);
+  const
+    Error = 'Error getting %s module information using GetModuleInformation(): (%d) %s';   
+  var
+    ModuleInfo: TModuleInfo;
+  begin
+    if GetModuleInformation(GetCurrentProcess, Handle, @ModuleInfo, SizeOf(ModuleInfo)) then
+    begin
+      Base := DWord(ModuleInfo.lpBaseOfDll);
+      Finish := Base + ModuleInfo.SizeOfImage;
+    end
+      else
+        LLErr(Error, [Caption, GetLastError, SysErrorMessage(GetLastError)]);
+  end;
+
 var
-  ModuleInfo: TModuleInfo;
+  Modules: TProcessModules;
+  I: Integer;
 begin
   PreHookAddr := @PreHook;
   PostHookAddr := @PostHook;
+  HookImageEnd := 0;
+  Modules := NIL;   // compiler warning.
 
-  if GetModuleInformation(GetCurrentProcess, hInstance, @ModuleInfo, SizeOf(ModuleInfo)) then
+  SetModuleInfo('self', hInstance, SelfImageBase, SelfImageEnd);
+
+  if HookImageName = '' then
   begin
-    SelfImageBase := DWord(ModuleInfo.lpBaseOfDll);
-    SelfImageEnd := SelfImageBase + ModuleInfo.SizeOfImage;
+    SetModuleInfo('main', GetModuleHandle(NIL), HookImageBase, HookImageEnd);
+    LLDbg('Restricted hooks to main module at %.8X..%.8X.', [HookImageBase, HookImageEnd]);
   end
-    else
-      LLErr(Error, [GetLastError, SysErrorMessage(GetLastError)]);
+    else if HookImageName = '*' then
+      LLDbg('Hooking all callers except for the library itself (HookImageName is ''*'').', [])
+      else
+      begin
+        Modules := GetProcessModules;
+
+        for I := 0 to Length(Modules) - 1 do
+          with Modules[I] do
+            if PosW(HookImageName, Name) <> 0 then
+            begin
+              HookImageBase := BaseAddress;
+              HookImageEnd := EndAddress;
+              LLDbg('Restricted hooks to module %s at %.8X..%.8X.', [Name, BaseAddress, EndAddress]);
+              Break;
+            end;
+
+        if HookImageEnd = 0 then
+          LLErr('No matching module ''%s'' to restrict hooks to; hooking all.', [HookImageName]);
+      end;
 end;
 
-procedure InitLowLevel(AScript: TAhScript; ACatalog: TAhApiCatalog);
+procedure InitLowLevel(AScript: TAhScript; ACatalog: TAhApiCatalog; const HookImageName: WideString);
 var
   I: Integer;
 begin
@@ -916,7 +1011,8 @@ begin
 
   Procs.Consts.NotExistingVarCallback := Script.Consts.GetIfExists;
 
-  InitSelfData;
+  InitVars(HookImageName);
+  LLDbg('Library is loaded at %.8X..%.8X.', [SelfImageBase, SelfImageEnd]);
 
   SetProcHookCount(InitialProcHookCount);
 
@@ -955,7 +1051,10 @@ initialization
   GlobalSaved.Sorted := True;
   GlobalSaved.Duplicates := dupError;
 
+  InitializeCriticalSection(GlobalCritSection);
+
 finalization
+  DeleteCriticalSection(GlobalCritSection);
   GlobalSaved.Free;
 
   if Procs <> NIL then

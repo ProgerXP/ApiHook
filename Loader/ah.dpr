@@ -86,6 +86,7 @@ type
       procedure VDealloc(Proc: THandle; Addr: Pointer; Size: DWord);
 
     procedure Output(Level: TAhLogLevel; Msg: WideString; Fmt: array of const);
+    function WatchLogLine(Line: WideString; Data: DWord): Boolean;
 
     procedure WriteStringTo(Handle: DWord; Str: WideString); override;
     function OnCtrlEvent(Event: DWord): Boolean; override;
@@ -106,6 +107,7 @@ type
     procedure AcquireOptions; override;
     procedure AcquireTaskArgs(const Task: WideString);
     function ReadPostActionFor(const Task: WideString): WideString;
+    procedure WatchLogLoop(const LogFile: WideString; Interval: Integer);
 
     function ExpandPath(Path, BasePath: WideString): WideString;
 
@@ -132,6 +134,7 @@ const
   PipeLoopFetchNextSleep = 50;
 
   RemoteThreadTimeout = 5 * 1000;
+  DefaultWatchInterval = 500;   // msec
 
   PipePrefix          = '\\.\pipe\ApiHook\';
   PipeMode            = PIPE_TYPE_BYTE or PIPE_READMODE_BYTE or PIPE_WAIT;
@@ -172,11 +175,6 @@ end;
 function LoaderData(const DLL: WideString; const Settings: TAhSettings): TLoaderData; overload;
 begin
   Result := LoaderData(DLL, False, Settings);
-end;
-
-function LoaderData(const DLL: WideString): TLoaderData; overload;
-begin
-  Result := LoaderData(DLL, True, AhSettings(False, False, ''));
 end;
 
 procedure Loader(Data: PLoaderData); stdcall;
@@ -453,12 +451,22 @@ begin
           else
             Result := inherited TryDoingTask(Task);
 
-  Action := ReadPostActionFor(Task);
+  if FPipeThread = NIL then
+    Action := ''
+    else if FCLParser.IsSwitchOn('detach') then
+      Action := FCLParser.GetOrDefault('detach', 'd')
+      else
+        Action := ReadPostActionFor(Task);
 
   FreePipe;   // the sooner we disconnect it the better - less chances for resources to go unavailable.
 
   if Action = 'k' then
-    FWaitOnExit := clAlwaysWait;
+    FWaitOnExit := clAlwaysWait
+    else if Action = 'w' then
+      if FCLParser.IsPassed('lib-logs') then
+        WatchLogLoop(FCLParser['lib-logs'], StrToIntDef(FCLParser['watch-interval'], DefaultWatchInterval))
+        else
+          Log(logError, 'post action: no watch log', []);
 end;
 
   procedure TApiHookApp.AcquireTaskArgs(const Task: WideString);
@@ -522,44 +530,104 @@ end;
   begin
     Result := '';
 
-    if not FCLParser.IsSwitchOn('detach') and (FPipeThread <> NIL) then
+    TimeStart := timeGetTime;
+    while not FPipeData.IsPipeInitialized and (timeGetTime - TimeStart < MaxPipeInitTime) do
+      Sleep(MaxPipeInitTime div 10);
+
+    if Task = 'self' then
     begin
-      TimeStart := timeGetTime;
-      while not FPipeData.IsPipeInitialized and (timeGetTime - TimeStart < MaxPipeInitTime) do
-        Sleep(MaxPipeInitTime div 10);
+      ConsoleWrite( FLang['post action: self'] );
+      ConsoleWaitForEnter;
+    end
+      else if (Task = 'launch') or (Task = 'attach') then
+        while RanOK and not FExitPipeThread and ( (Result = '') or (Result = #0) ) do
+        begin
+          if Result = '' then
+            ConsoleWrite( FLang['post action'] )
+            else
+              ConsoleWrite( FLang['post action repeat'] );
 
-      if Task = 'self' then
-      begin
-        ConsoleWrite( FLang['post action: self'] );
-        ConsoleWaitForEnter;
-      end
-        else if (Task = 'launch') or (Task = 'attach') then
-          while RanOK and not FExitPipeThread and ( (Result = '') or (Result = #0) ) do
-          begin
-            if Result = '' then
-              ConsoleWrite( FLang['post action'] )
-              else
-                ConsoleWrite( FLang['post action repeat'] );
+          ReadLn(Result);
+          Result := LowerCase(Copy(Result, 1, 1));
 
-            ReadLn(Result);
-
-            Result := LowerCase(Copy(Result, 1, 1));
-            if Result = 'd' then
-              {Go ahead}
-              else if (Result = 't') or (Result = 'k') then
-                FPipeData.DetachType := 'TERMINATE'
-                else if Result = 'r' then
-                  FPipeData.DetachType := 'RESTORE'
-                  else if (Result = 's') and FileExists(FArgs.Script) then
-                  begin
-                    FPipeData.Script := TFileStreamW.LoadUnicodeFrom(FArgs.Script);
-                    InterlockedIncrement(FPipeData.SendScript);
-                    ConsoleWriteLn( FLang.Format('post action: script reloaded', [FArgs.Script]) );
+          if (Result = 'd') or (Result = 'w') then
+            { Leave }
+            else if (Result = 't') or (Result = 'k') then
+              FPipeData.DetachType := 'TERMINATE'
+              else if Result = 'r' then
+                FPipeData.DetachType := 'RESTORE'
+                else if (Result = 's') and FileExists(FArgs.Script) then
+                begin
+                  FPipeData.Script := TFileStreamW.LoadUnicodeFrom(FArgs.Script);
+                  InterlockedIncrement(FPipeData.SendScript);
+                  ConsoleWriteLn( FLang.Format('post action: script reloaded', [FArgs.Script]) );
+                  Result := #0;
+                end
+                  else
                     Result := #0;
-                  end
-                    else
-                      Result := #0;
-          end;
+        end;
+  end;
+
+  procedure TApiHookApp.WatchLogLoop(const LogFile: WideString; Interval: Integer);
+  const
+    MaxTail = 20480;
+  var
+    Stream: TFileStreamW;
+    LastPos, NewSize: DWord;
+    Tail: WideString;
+  begin
+    if Interval < 20 then
+      Interval := 20;
+
+    LastPos := FileSize(LogFile);
+    Log(logInfo, 'post action: watch', [LogFile, LastPos, Interval]);
+
+    repeat
+      Sleep(Interval);
+      NewSize := FileSize(LogFile);
+
+      if LastPos > NewSize then
+      begin
+        Log(logInfo, 'post action: watch shrunk', [LastPos - NewSize, NewSize]);
+        LastPos := 0;
+      end;
+
+      if (LastPos < NewSize) and (NewSize > 0) then
+      begin
+        if NewSize - LastPos > MaxTail then
+          SetLength(Tail, MaxTail div 2)
+          else
+            SetLength(Tail, (NewSize - LastPos) div 2);
+
+        Stream := TFileStreamW.Create(LogFile, fmOpenRead + fmShareDenyNone);
+        try
+          Stream.Position := LastPos;
+          Stream.Read(Tail[1], Length(Tail) * 2);
+        finally
+          Stream.Free;
+        end;
+                                                
+        if NewSize - LastPos > MaxTail then
+          Tail := Tail + '...';
+        CallOnEachLineIn(Tail, WatchLogLine);
+
+        if NewSize - LastPos > MaxTail then
+          Log(logInfo, 'post action: watch tong tail', [NewSize - LastPos - MaxTail]);
+
+        LastPos := NewSize;
+      end;
+    until not RanOK;
+  end;
+
+  function TApiHookApp.WatchLogLine(Line: WideString; Data: DWord): Boolean;
+  begin
+    Result := False;
+
+    try
+      Log(logUser, Line, []);
+    except
+      on EColorConsole do
+        Log(logUser, CCQuote(Line), []);
     end;
   end;
 
@@ -665,9 +733,21 @@ begin
 end;
 
   function TApiHookApp.GetLdrSettings: TAhSettings;
+  var
+    ThreadSafe: TAhCritSectionMode;
   begin
     with FCLParser do
-      Result := AhSettings( IsSwitchOn('thread-safe'), IsSwitchOn('threads', True), InitPipe );
+    begin
+      if IsSwitchOn('thread-safe', True) then
+        if Options['thread-safe'] = 'p' then
+          ThreadSafe := csPerProc
+          else
+            ThreadSafe := csGlobal
+        else
+          ThreadSafe := csNone;
+
+      Result := AhSettings(ThreadSafe, IsSwitchOn('threads', True), InitPipe, GetOrDefault('module', ''));
+    end;
   end;
 
 function TApiHookApp.Attach(const DLL, Process: WideString): Boolean;
@@ -687,7 +767,7 @@ var
   Proc: TAhProcInfo;
 begin
   Proc := CreateProc(DLL, EXE);
-  Result := InjectInto(Proc, DLL, LoaderData(DLL));
+  Result := InjectInto( Proc, DLL, LoaderData(DLL, True, AhSettings(csNone, False, '')) );
   ResumeProc(Proc);
 end;
 

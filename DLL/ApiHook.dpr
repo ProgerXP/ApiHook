@@ -2,6 +2,13 @@ library ApiHook;
 
 {$IFDEF AhDebug}
   {$MESSAGE WARN 'Building ApiHook in debug mode.'}
+
+  {
+    Debug mode changes the following:
+    * Calls from within ApiHook.dll are not ignored (see LL's SkipHookedCaller)
+    * Import Table entries (in hmImport mode) are hooked in ApiHook.dll instead of main process
+    * After the loader has initialized the library CallDebugProcs is called with some test code
+  }
 {$ENDIF}
 
 uses
@@ -104,6 +111,9 @@ type
     constructor Create(ALevel: TAhLogLevel; const AMsg, AFmt: WideString);
   end;
 
+const
+  MaxLogQueue = 1000;
+
 { TLogQueueItem }
 
 constructor TLogQueueItem.Create(ALevel: TAhLogLevel; const AMsg, AFmt: WideString);
@@ -126,10 +136,8 @@ begin
   FLogError := NIL;
   FLogData := NIL;
 
-  if FApp.Settings.UseCriticalSections then
-    InitializeCriticalSection(FAddLogCritSection);
-
-  FLogQueue := TObjectQueue.Create;  
+  InitializeCriticalSection(FAddLogCritSection);
+  FLogQueue := TObjectQueue.Create;
 
   inherited ConnectTo(NamedPipe);
 
@@ -143,8 +151,7 @@ begin
     FLogQueue.Pop.Free;
   FLogQUeue.Free;
 
-  if FApp.Settings.UseCriticalSections then
-    DeleteCriticalSection(FAddLogCritSection);
+  DeleteCriticalSection(FAddLogCritSection);
 
   if FLogData <> NIL then
     FLogData.Free;
@@ -232,20 +239,41 @@ begin
 end;
 
 procedure TAhLibPipe.QueueLog(Level: TAhLogLevel; const Msg: WideString; Fmt: array of const);
+const
+  MaxError = 'Too many log items - removing all but last %d; use --lib-logs for all output.';
 var
   NewMsg, NewFmt: WideString;
+  I: Integer;
 begin
   if (FData.ServerVersion = 0) or (Level < FData.MinLogLevel) then
-    Exit;  
+    Exit;
 
-  if FApp.Settings.UseCriticalSections then
-    EnterCriticalSection(FAddLogCritSection);
+  if FLogQueue.Count >= MaxLogQueue then
+  begin
+    // should be faster to loop over a precalculated value than call Count 1000s of times.
+    for I := FLogQueue.Count - 10 downto 1 do
+      FLogQueue.Pop.Free;
 
-  MakePortableFormat(Msg, Fmt, NewMsg, NewFmt);
-  FLogQueue.Push( TLogQueueItem.Create(Level, NewMsg, NewFmt) );
-  
-  if FApp.Settings.UseCriticalSections then
-    LeaveCriticalSection(FAddLogCritSection);
+    FApp.Log(logError, MaxError, [FLogQueue.Count]);
+  end
+    else
+    begin
+      if FApp.Settings.UseCriticalSections <> csNone then
+        EnterCriticalSection(FAddLogCritSection);
+
+      MakePortableFormat(Msg, Fmt, NewMsg, NewFmt);
+
+      if (Level = logError) and (Msg = MaxError) then
+        // this trick puts the message in front of others so it gets to the loader's
+        // console output on the next update; otherwise it's a good chance that next
+        // log messages overflow will erase it without a trace. 
+        TObjectStack(FLogQueue).Push( TLogQueueItem.Create(Level, NewMsg, NewFmt) )
+        else
+          FLogQueue.Push( TLogQueueItem.Create(Level, NewMsg, NewFmt) );
+
+      if FApp.Settings.UseCriticalSections <> csNone then
+        LeaveCriticalSection(FAddLogCritSection);
+    end;
 end;
 
 procedure TAhLibPipe.DoReport(Msg: WideString; Fmt: array of const);
@@ -329,13 +357,15 @@ begin
 
   if Result then
   begin
-    Debug('Bootstrapping; UseCriticalSections = %s; named pipe = %s',
-          [BoolToStr(FSettings.UseCriticalSections, True), FSettings.Pipe]);
+    Debug('Bootstrapping; UseCriticalSections = %d; named pipe = %s',
+          [Byte(FSettings.UseCriticalSections), FSettings.Pipe]);
 
     if lstrlen(@FSettings.Pipe[0]) > 0 then
       FPipe := TAhLibPipe.ConnectTo(FSettings.Pipe, Self)
       else
         FPipe := NIL;
+
+    FPipeThread := NIL;
                              
     if FPipe <> NIL then
     begin
@@ -403,7 +433,7 @@ begin
   LLOnScriptLog := Self.Log;
   LLUserFilePath := IncludeTrailingPathDelimiter(FUserPath);
 
-  InitLowLevel(FScript, FCatalog);
+  InitLowLevel(FScript, FCatalog, FSettings.HookModule);
   FScript := NIL;
   FCatalog := NIL;
   
@@ -504,7 +534,7 @@ end;
 
 procedure TAhHookLib.CmdScript(const Script: WideString);
 begin
-  Debug('Loading script & attaching handlers; Script = "%s"...', [Script]);
+  Debug('Loading script & attaching handlers; Script (%d) = "%s"...', [Length(Script), Copy(Script, 1, 50)]);
 
   if FScript <> NIL then
     FScript.Free;
@@ -537,14 +567,20 @@ begin
 end;
 
 {$IFDEF AhDebug}
-class procedure TAhHookLib.CallDebugProcs;
-var
-  Buf: array[0..255] of Char;
-  I: DWord;
-begin
-  readfile(tfilestreamw.Create('s.oo', fmopenread).Handle, buf[0], 5, i, nil);
-//  halt
-end;
+  class procedure TAhHookLib.CallDebugProcs;
+  var
+    Buf: array[0..255] of Char;
+    I: DWord;
+    F: TFileStream;
+  begin
+  //windows.Sleep(1);
+  exit;
+  f := tfilestreamw.Create('s.oo', fmopenread);
+  while true do
+    readfile(f.Handle, buf[0], 5, i, nil);
+  f.Free;
+  //  halt
+  end;
 {$ENDIF}
 
 { Exports & DLL Proc }
@@ -552,12 +588,12 @@ end;
 var
   App: TAhHookLib = NIL;
 
-{ <! Each must have a top-level try..except block !> }
+{------------>   Each export must have a top-level try..except block   <------------}
 
 function Bootstrap(const ASettings: TAhSettings): Boolean; stdcall;
 begin
   Result := False;
-  OutputDebugString('ApiHook Bottstrap export procedure called.');
+  OutputDebugString('ApiHook Bootstrap export procedure called.');
 
   try
     App := TAhHookLib.Create(ASettings);

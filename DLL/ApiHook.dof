@@ -100,7 +100,7 @@ Conditionals=AhDebug1
 DebugSourceDirs=
 UsePackages=0
 [Parameters]
-RunParams=l n --debug-loader=r s --thread-safe
+RunParams=l n --suspend=0 --module=explorer
 HostApplication=C:\Program Files\Borland\Delphi7\Projects\!VN hack\ApiHook\Out\ah.exe
 Launcher=
 UseLauncher=0
@@ -109,7 +109,7 @@ DebugCWD=
 IncludeVerInfo=1
 AutoIncBuild=0
 MajorVer=0
-MinorVer=99
+MinorVer=84
 Release=0
 Build=0
 Debug=0
@@ -122,7 +122,7 @@ CodePage=1252
 [Version Info Keys]
 CompanyName=
 FileDescription=Sophisticated API hooking tool. Homepage: http://proger.i-forge.net/ApiHook
-FileVersion=0.99.0.0
+FileVersion=0.84.0.0
 InternalName=
 LegalCopyright=In public domain by Proger_XP
 LegalTrademarks=
@@ -131,6 +131,9 @@ ProductName=
 ProductVersion=1.0.0.0
 Comments=
 [Excluded Packages]
+C:\Program Files\Borland\Delphi7\Projects\Bpl\IndyCore70.bpl=Indy 10 Core
+C:\Program Files\Borland\Delphi7\Projects\Bpl\IndySystem70.bpl=Indy 10 System
+C:\Program Files\Borland\Delphi7\Projects\Bpl\IndyProtocols70.bpl=Indy 10 Protocols
 c:\program files\borland\delphi7\Projects\Bpl\Components.bpl=D7X Components
 c:\program files\borland\delphi7\Projects\Bpl\dclusr70.bpl=Borland User Components
 C:\WINDOWS\system32\ibevnt70.bpl=Borland Interbase Event Alerter Component
