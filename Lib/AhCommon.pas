@@ -145,6 +145,7 @@ const
 function LogLevelToPrefix(Level: TAhLogLevel): WideString;
 function LogLevelToChar(Level: TAhLogLevel): Char;
 function ExtractLogLevelFrom(var FN: WideString): WideString;
+function ExpandLogFileName(const FN: WideString): WideString;
 
 function AhSettings(UseCriticalSections: TAhCritSectionMode; UseThreads: Boolean; const Pipe: String;
   const HookModule: WideString = ''): TAhSettings;
@@ -197,6 +198,18 @@ begin
     Result := 'iue'
     else
       Result := Copy(Levels, Level, MaxInt);
+end;
+
+function ExpandLogFileName(const FN: WideString): WideString;
+var
+  NameStart: Integer;
+begin
+  NameStart := 1;
+
+  while (NameStart <= Length(FN)) and (Char(FN[NameStart]) in ['+', '#', '!', '%']) do
+    Inc(NameStart);
+
+  Result := Copy(FN, 1, NameStart - 1) + ExpandFileName(Copy(FN, NameStart, MaxInt));
 end;
 
 function AhSettings(UseCriticalSections: TAhCritSectionMode; UseThreads: Boolean; const Pipe: String;
@@ -380,13 +393,13 @@ begin
     Report('error reading %d bytes of data: %s', [Size, SysErrorMsg]);
 
   if FLogReceive then
-    ReportData('recv$ ' + BinToHex(Result, Size, ' '), []);
+    ReportData('recv$ ' + BinToHex(Data, Size, ' '), []);
 end;
 
 function TAhPipe.SendData(const Data; Size: Integer): Boolean;
 begin
   if FLogSend then
-    ReportData('send% ' + BinToHex(Data, Size, ' '), []);
+    ReportData('send$ ' + BinToHex(Data, Size, ' '), []);
 
   Result := FStream.Write(Data, Size) = Size;
 

@@ -107,7 +107,7 @@ type
     procedure AcquireOptions; override;
     procedure AcquireTaskArgs(const Task: WideString);
     function ReadPostActionFor(const Task: WideString): WideString;
-    procedure WatchLogLoop(const LogFile: WideString; Interval: Integer);
+    procedure WatchLogLoop(LogFile: WideString; Interval: Integer);
 
     function ExpandPath(Path, BasePath: WideString): WideString;
 
@@ -279,17 +279,13 @@ var
 begin
   inherited;
 
-  FLogTimeFmt := FCLParser.Options['log-time'];
-  if FLogTimeFmt = FCLParser.NotPassed then
-    FLogTimeFmt := FLang['log time'];
-
+  FLogTimeFmt := FCLParser.GetOrDefault('log-time', FLang['log time']);
   FLogLevel := GetLogLevelOpt('verbose');
   FInitialCWD := CurrentDirectory;
 
-  NewCWD := FCLParser['chdir'];
-  if (NewCWD <> FCLParser.NotPassed) then
+  if FCLParser.IsPassed('chdir') then
   begin
-    NewCWD := ExpandPath(NewCWD, ExtractFilePath( ParamStrW(0) ));
+    NewCWD := ExpandPath(FCLParser['chdir'], ExtractFilePath( ParamStrW(0) ));
 
     if NewCWD <> CurrentDirectory then
       if ChDir(NewCWD) then
@@ -316,7 +312,7 @@ begin
   Version := AhVersion;
   Author := 'Proger_XP';
   WWW := AhHomePage;
-  BuildDate := $10022012;
+  BuildDate := $20052013;
 
   Help := FLang['help'];
   HelpDetails := FLang['help details'];
@@ -463,10 +459,10 @@ begin
   if Action = 'k' then
     FWaitOnExit := clAlwaysWait
     else if Action = 'w' then
-      if FCLParser.IsPassed('lib-logs') then
-        WatchLogLoop(FCLParser['lib-logs'], StrToIntDef(FCLParser['watch-interval'], DefaultWatchInterval))
+      if FPipeData.LibLogs = '' then
+        Log(logError, 'post action: no watch log', [])
         else
-          Log(logError, 'post action: no watch log', []);
+          WatchLogLoop(FPipeData.LibLogs, StrToIntDef(FCLParser['watch-interval'], DefaultWatchInterval));
 end;
 
   procedure TApiHookApp.AcquireTaskArgs(const Task: WideString);
@@ -487,15 +483,13 @@ end;
     begin
       if (Task = 'inject') or (Task = 'extend') then
         DLL := TaskArg(Task, 1)
-        else
-        begin
-          DLL := FCLParser['lib'];
-          if DLL = FCLParser.NotPassed then
+        else if FCLParser.IsPassed('lib') then
+          DLL := FCLParser['lib']
+          else
           begin
             DLL := 'ApiHook.dll';
             Log(logDebug, 'ack: --lib', [DLL]);
           end;
-        end;
 
       DLL := ExpandFileName(DLL);
 
@@ -568,7 +562,7 @@ end;
         end;
   end;
 
-  procedure TApiHookApp.WatchLogLoop(const LogFile: WideString; Interval: Integer);
+  procedure TApiHookApp.WatchLogLoop(LogFile: WideString; Interval: Integer);
   const
     MaxTail = 20480;
   var
@@ -578,6 +572,9 @@ end;
   begin
     if Interval < 20 then
       Interval := 20;
+
+    LogFile := ExpandLogFileName(LogFile);
+    ExtractLogLevelFrom(LogFile);
 
     LastPos := FileSize(LogFile);
     Log(logInfo, 'post action: watch', [LogFile, LastPos, Interval]);
@@ -685,13 +682,9 @@ begin
   if not FileExists(EXE) then
     FLang.RaiseText('error: launch: no exe', [EXE]);
 
-  CL := FCLParser['cl'];
-  if CL = FCLParser.NotPassed then
-    CL := '';
+  CL := FCLParser.GetOrDefault('cl', '');
 
-  CWD := FCLParser['new-dir'];
-  if CWD = FCLParser.NotPassed then
-    CWD := '';
+  CWD := FCLParser.GetOrDefault('new-dir', '$');
   CWD := ExpandPath(CWD, ExtractFilePath(EXE));
   Log(logDebug, 'ack: --new-dir', [CWD]);
 
@@ -835,7 +828,7 @@ begin
       if Thread = 0 then
         FLang.RaiseText('error: attach: CreateRemoteThread', [SysErrorMsg]);
 
-      if DebugLoader then
+       if DebugLoader then
         WaitForSingleObject(Thread, INFINITE)
         else if WaitForSingleObject(Thread, RemoteThreadTimeout) <> WAIT_OBJECT_0 then
           Error('error: attach: loader thread timeout', [RemoteThreadTimeout, SysErrorMsg]);
@@ -1006,7 +999,7 @@ procedure TApiHookApp.InitLibraryViaPipe;
     if Trim(Consts) = '' then
       Consts := '';
 
-    if FCLParser['define'] <> FCLParser.NotPassed then
+    if FCLParser.IsPassed('define') then
     begin
       ConstArray := ExplodeUnquoting(',', FCLParser['define'], 0, True);
       Consts := Consts + F_EOLN + Join(ConstArray, F_EOLN);
@@ -1021,6 +1014,20 @@ procedure TApiHookApp.InitLibraryViaPipe;
         Insert(Consts + F_EOLN, Catalog, Pos + Length(ConstSection) + Length(F_EOLN) * 2);
   end;
 
+  function ReadCatalog(const Option, DefaultFN: WideString): WideString;
+  var
+    FN: WideString;
+  begin
+    FN := FCLParser.GetOrDefault(Option, DefaultFN);
+    if FN <> DefaultFN then
+      Log(logInfo, 'ack: --catalog', [FN]);
+
+    if FileExists(FN) then
+      Result := TFileStreamW.LoadUnicodeFrom(FN)
+      else
+        Result := '';
+  end;
+
 begin
   with FPipeData do
   begin
@@ -1029,20 +1036,16 @@ begin
 
       LibLogLevel := GetLogLevelOpt('lib-verbose');
 
-      LibLogs := FCLParser['lib-logs'];
-      if LibLogs = FCLParser.NotPassed then
-        LibLogs := '-';
+      LibLogs := FCLParser.GetOrDefault('lib-logs', '-');
       if LibLogs <> '-' then
       begin
-        LibLogs := ExpandFileName(LibLogs);
+        LibLogs := ExpandLogFileName(LibLogs);
         Log(logInfo, 'ack: --lib-logs', [LibLogs]);
       end;
 
-      UserPath := FCLParser['user-path'];
-      if UserPath = FCLParser.NotPassed then
-        UserPath := 'User';
+      UserPath := FCLParser.GetOrDefault('user-path', 'User');
       UserPath := ExpandFileName(UserPath);
-      if FCLParser['user-path'] <> FCLParser.NotPassed then
+      if FCLParser.IsPassed('user-path') then
         Log(logInfo, 'ack: --user-path', [UserPath]);
 
     FPipe.Send('HELLO');
@@ -1052,14 +1055,7 @@ begin
         Log(logInfo, 'log: lib version', [StringUtils.FormatVersion(FPipeData.ClientVersion),
                                           StringUtils.FormatVersion(AhVersion)]);
 
-      Catalog := FCLParser['catalog'];
-      if Catalog = FCLParser.NotPassed then
-        Catalog := 'Catalog.ini'
-        else
-          Log(logInfo, 'ack: --catalog', [Catalog]);
-      if FileExists(Catalog) then
-        Catalog := TFileStreamW.LoadUnicodeFrom(Catalog);
-
+      Catalog := ReadCatalog('catalog', 'Catalog.ini') + #13#10 + ReadCatalog('extra-catalog', 'My.ini');
       AppendConstsTo(Catalog);
 
     FPipe.Send('CATALOG');

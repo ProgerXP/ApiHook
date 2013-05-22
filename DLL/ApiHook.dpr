@@ -291,6 +291,8 @@ procedure TAhLibPipe.WriteLog(var Log: TStream; var LogFN: WideString;
 begin
   if Length(Fmt) > 0 then
     Msg := Format(Msg, Fmt);
+  if Length(Msg) > 120 then
+    Msg := Copy(Msg, 1, 100) + '...';
   OutputDebugStringW(PWideChar('Pipe: ' + Msg));
 
   if LogFN <> '' then
@@ -405,13 +407,13 @@ end;
 
 procedure TAhHookLib.Log(Level: TAhLogLevel; Msg: WideString; Fmt: array of const);
 begin
-  // OutputDebugStringW actually wraps around OutputDebugStringA - see MSGN.
   try
+    // OutputDebugStringW actually wraps around OutputDebugStringA - see MSGN.
     OutputDebugStringA(PChar( Format(Msg, Fmt) ));
   except
     asm nop end;   // to catch Format %char errors in code.
   end;
-
+      
   FLogs.Log(Level, Msg, Fmt);
 
   if FPipe <> NIL then
@@ -506,7 +508,7 @@ procedure TAhHookLib.CmdCatalog(const Catalog: WideString);
 var
   Ini: TCustomIniFileW;
 begin
-  Debug('Loading API catalog from %s...', [Catalog]);
+  Debug('Loading API catalog (%d) = "%s"...', [Length(Catalog), Copy(Catalog, 1, 50)]);
 
   if IsLowLevelInit then
   begin
@@ -573,13 +575,13 @@ end;
     I: DWord;
     F: TFileStream;
   begin
-  //windows.Sleep(1);
-  exit;
-  f := tfilestreamw.Create('s.oo', fmopenread);
-  while true do
-    readfile(f.Handle, buf[0], 5, i, nil);
-  f.Free;
-  //  halt
+    //windows.Sleep(1);
+    exit;
+    f := tfilestreamw.Create('s.oo', fmopenread);
+    while true do
+      readfile(f.Handle, buf[0], 5, i, nil);
+    f.Free;
+    //  halt
   end;
 {$ENDIF}
 
@@ -621,9 +623,14 @@ begin
 end;
 
 procedure PipeLoop; stdcall;
-begin                                  
+begin
   OutputDebugString('ApiHook PipeLoop export procedure called.');
-  App.FPipe.ReceiveThread(NIL, NIL);
+
+  if (App <> NIL) and (App.FPipe <> NIL) then  
+    try
+      App.FPipe.ReceiveThread(NIL, NIL);
+    except
+    end;
 end;
 
 procedure DllEvent(Event: Integer);
