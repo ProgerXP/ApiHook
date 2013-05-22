@@ -110,21 +110,21 @@ const
     {MOV    EAX, origRetAddr}   $8B, $44, $24,     $04,   // [ESP+4]
 
     {MOV    slot, EAX}          $89, $84, $24,
-                                     $01, $F0, $FF, $FF,  // [ESP-0x3FF]
+                                     $01, $E0, $FF, $FF,  // [ESP-0x3FF]
                                 $C6, $84, $24,
-                                     $00, $F0, $FF, $FF, $68,
+                                     $00, $E0, $FF, $FF, $68,
 
                                 $C7, $84, $24,
-                                     $06, $F0, $FF, $FF,
+                                     $06, $E0, $FF, $FF,
                                      0, 0, 0, 0,
                                 $C6, $84, $24,
-                                     $05, $F0, $FF, $FF, $68,
+                                     $05, $E0, $FF, $FF, $68,
 
                                 $C6, $84, $24,
-                                     $0A, $F0, $FF, $FF, $C3,
+                                     $0A, $E0, $FF, $FF, $C3,
 
                                 $8D, $84, $24,
-                                     $00, $F0, $FF, $FF,
+                                     $00, $E0, $FF, $FF,
                                 $89, $44, $24,
                                      $04,
 //    {MOV    slot, EAX}          $A3,        0, 0, 0, 0,   {slot}
@@ -142,7 +142,7 @@ const
 //    {DD     slot}               {DD}        0, 0, 0, 0    // temp, used above
     $C3,
     {JMP    slot}               $FF, $A4, $24,
-                                     $00, $F0, $FF, $FF   // [ESP-0x400]
+                                     $00, $E0, $FF, $FF   // [ESP-0x400]
   );
 
   JumperTplIndex1    = 1;
@@ -760,6 +760,8 @@ end;
 function HookPrologueProc(var Hook: TProcHook): Boolean;
 const
   VpError = 'VirtualProtect(proc = %s, addr = %.8X, size = %d, PAGE_READWRITE) has failed.';
+  ShortPrologueError = 'Prologue of function %s is too short (%d bytes) - must be at least %d.' +
+                       ' Falling back to less safe hot prologue swapping.';
 begin
   Result := False;
 
@@ -769,7 +771,8 @@ begin
        and LLErr(VpError, [Proc, DWord(OrigAddr), SizeOf(TPrologue)]) then
       Exit;
 
-    if PrologueLength = 0 then
+    if (PrologueLength = 0) or
+       ( (PrologueLength < SizeOf(TPrologue)) and LLErr(ShortPrologueError, [Proc, PrologueLength, SizeOf(TPrologue)]) ) then
       PatchCopying(@OrigPrologue[0], OrigAddr, SizeOf(TPrologue))
       else
         FillVarPrologueOf(Hook);
@@ -1006,7 +1009,7 @@ begin
       Script.Free;
     Script := AScript;
   end
-    else if (Script = NIL) and LLErr('No Script passed to InitLowLevel.', []) then
+    else if (Script = NIL) and LLErr('No AScript passed to InitLowLevel.', []) then
       Exit;
 
   Procs.Consts.NotExistingVarCallback := Script.Consts.GetIfExists;
