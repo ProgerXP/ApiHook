@@ -917,7 +917,7 @@ var
 
 begin
   for I := FProcs.Count - 1 downto 0 do
-    if FProcs.Strings[I] = '' then
+    if (FProcs.Strings[I] = '') or (FProcs.Strings[I][1] = ';') then
       FProcs.Delete(I)
       else if SetOptions then
         FProcs.Strings[I] := Copy(FProcs.Strings[I], 1, Length(FProcs.Strings[I]) - 1)
