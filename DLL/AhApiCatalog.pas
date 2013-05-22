@@ -104,11 +104,16 @@ type
 implementation
 
 type
-  TStdCallConv = class (TAhCallConv)   
-  public                                                
+  TStdCallConv = class (TAhCallConv)
+  public
     class function CallerCleansStack: Boolean; override;
     class function ParamAddrOf(Index: Integer; rESP: DWord): DWord; override;
     class function ReturnValueAddr(const Registers: TAhRegisters): DWord; override;
+  end;
+
+  TCdeclConv = class (TStdCallConv)
+  public
+    class function CallerCleansStack: Boolean; override;
   end;
 
 { TAhApiCatalog }
@@ -432,6 +437,14 @@ asm
   MOV   EAX, Registers.rEAX
 end;
 
+{ TCdeclConv }
+
+class function TCdeclConv.CallerCleansStack: Boolean;
+begin
+  Result := True;
+end;
+
 initialization
   Classes.RegisterClass(TStdCallConv);
+  Classes.RegisterClass(TCdeclConv);
 end.
