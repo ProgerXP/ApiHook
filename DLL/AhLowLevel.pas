@@ -5,11 +5,11 @@ interface
 uses PsAPI, Windows, SysUtils, StringUtils, RPNit, StringsW, FileStreamW, Utils,
      AhCommon, AhApiCatalog, AhScript;
 
-type                    
+type
   TAhHookedContext  = class;
 
   TPrologue         = array[0..5] of Byte;
-  TJumper           = array[0..97] of byte;
+  TJumper           = array[0..90] of byte;
 
   TProcHook = record
     Index: Integer;
@@ -25,7 +25,7 @@ type
     CritSection: TRTLCriticalSection;
     Context: TAhHookedContext;    // NIL when hook isn't executing.
 
-    OrigAddr, SlotAddr: Pointer;
+    OrigAddr: Pointer;
     OldPageMode: DWord;           // VirtualProtect's.
     OrigPrologue, NewPrologue: TPrologue;
     Jumper: TJumper;
@@ -99,8 +99,12 @@ const
   NewPrologueTplAddr = 1;
 
   JumperTpl: TJumper = (
+                  {---------------- Prehook ----------------}
+
     {PUSH   index}              $68,        0, 0, 0, 0,   {index}
-    {CALL   prehook}            $FF, $15,   0, 0, 0, 0,   {PreHookAddr}     
+    {CALL   prehook}            $FF, $15,   0, 0, 0, 0,   {PreHookAddr}
+
+                  {----------------  Debug ----------------}
 
   {$IFDEF 0}
     {INT    3 (debugger)}       $CD, $03,
@@ -108,59 +112,75 @@ const
     {NOP, NOP}                  $90, $90,
   {$ENDIF}
 
+                  {--------------- Original ---------------}
+
+  {  Here we create a jumper code to be called after original function returns.       }
+  {  It's created on stack to remain 100% thread-safe; offset is $2000 from ESP.      }
+
     {PUSH   EAX}                $50,
-    {MOV    EAX, origRetAddr}   $8B, $44, $24,     $04,   // [ESP+4]
+    {MOV    EAX, origRetAddr}   $8B, $44, $24,      $04,  // [ESP+4]
 
-    {MOV    slot, EAX}          $89, $84, $24,
-                                     $01, $E0, $FF, $FF,  // [ESP-0x3FF]
-                                $C6, $84, $24,
-                                     $00, $E0, $FF, $FF, $68,
+  {  writing    PUSH  origRetAddr }
+    {MOV    stack, <PUSH>}      $C6, $84, $24,
+                                     $00, $E0, $FF, $FF,  // [ESP-0x2000]
+                                     $68,                 {PUSH opcode}
+    {MOV    stack, EAX}         $89, $84, $24,
+                                     $01, $E0, $FF, $FF,  // [ESP-0x1FFF]
 
-                                $C7, $84, $24,
-                                     $06, $E0, $FF, $FF,
+  {  writing    PUSH  retHereAddr }
+    {MOV    stack, <PUSH>}      $C6, $84, $24,
+                                     $05, $E0, $FF, $FF,  // [ESP-0x1FFB]
+                                     $68,                 {PUSH opcode}
+    {MOV    stack, retHereAddr} $C7, $84, $24,
+                                     $06, $E0, $FF, $FF,  // [ESP-0x1FFA]
                                      0, 0, 0, 0,
-                                $C6, $84, $24,
-                                     $05, $E0, $FF, $FF, $68,
 
-                                $C6, $84, $24,
-                                     $0A, $E0, $FF, $FF, $C3,
+  {  writing    RET               }
+    {MOV    stack, <RET>}       $C6, $84, $24,
+                                     $0A, $E0, $FF, $FF,  // [ESP-0x1FF6]
+                                     $C3,                 {RET opcode}
 
-                                $8D, $84, $24,
-                                     $00, $E0, $FF, $FF,
-                                $89, $44, $24,
-                                     $04,
-//    {MOV    slot, EAX}          $A3,        0, 0, 0, 0,   {slot}
+  {  Here we replace original caller's address with our newly created stack landing.  }
+
+    {LEA EAX, retJumperAddr}    $8D, $84, $24,
+                                     $00, $E0, $FF, $FF,  // [ESP-2000]
+    {MOV retToReturnTo, EAX}    $89, $44, $24,
+                                     $04,                 // [ESP+4]
+
     {POP    EAX}                $58,
 
-//    {POP    EAX}                $58,                      // original caller's return address
-//    {CALL   orig}               $FF, $15,   0, 0, 0, 0,   {orig}
-                                $FF, $35,   0, 0, 0, 0,
-                                $C3,
+  {  Original routine address points either to first function's or VarPrologue's      }
+  {  opcode depending on PrologueLength.                                              }
 
-    {PUSH   index}              $68,        0, 0, 0, 0,   {index}
+    {PUSH   origRoutineAddr}    $FF, $35,   0, 0, 0, 0,
+    {RET}                       $C3,
+
+                  {--------------- Posthook ---------------}
+
+  {  Executing contniues at this point after origRoutine -> stackLanging calls.       }
+
+    {PUSH   index}              $68,        0, 0, 0, 0,
     {CALL   posthook}           $FF, $15,   0, 0, 0, 0,   {PostHookAddr}
 
-//    {JMP    slot}               $FF, $25,   0, 0, 0, 0,   {slot}
-//    {DD     slot}               {DD}        0, 0, 0, 0    // temp, used above
-    $C3,
-    {JMP    slot}               $FF, $A4, $24,
-                                     $00, $E0, $FF, $FF   // [ESP-0x400]
+                  {---------------- Return ----------------}
+
+  {  We have pushed original caller's address in the stack jumper (before index).     }
+
+    {RET}                       $C3
   );
 
   JumperTplIndex1    = 1;
   JumperTplPreHook   = JumperTplIndex1 + 6;
-  JumperTplSlot1     = JumperTplPreHook + 10;
-  JumperTplContSlot  = JumperTplPreHook + 33;
-  JumperTplOrig      = JumperTplPreHook + 67;//JumperTplSlot1 + 8 + 2;
+  JumperTplContSlot  = JumperTplPreHook + 41;
+  JumperTplOrig      = JumperTplContSlot + 26;
   JumperTplContAt    = JumperTplOrig + 5;
-  JumperTplIndex2    = JumperTplOrig + 5 + 1;
+  JumperTplIndex2    = JumperTplContAt + 1;
   JumperTplPostHook  = JumperTplIndex2 + 6;
-  JumperTplSlot2     = JumperTplPostHook + 6;
 
-var                 
+var
   Procs: TAhApiCatalog = NIL;
   Script: TAhScript = NIL;
-  GlobalSaved: TObjectHash = NIL;     
+  GlobalSaved: TObjectHash = NIL;
   GlobalCritSection: TRTLCriticalSection;
 
   ProcHooks: array of TProcHook;
@@ -223,7 +243,7 @@ begin
   SetLength(ProcHooks, Count);
 
   if Count > OldCount then
-    ZeroMemory(@ProcHooks[OldCount], (Count - OldCount) * SizeOf(TProcHook));          
+    ZeroMemory(@ProcHooks[OldCount], (Count - OldCount) * SizeOf(TProcHook));
 
   if ProcHookCount > Count then
     ProcHookCount := Count;
@@ -254,7 +274,7 @@ procedure Patch(var Dest; Data: DWord);
 begin
   DWord(Dest) := Data;
 end;
-                                                          
+
 procedure FillNewPrologueOf(var Hook: TProcHook);
 begin
   Hook.NewPrologue := NewPrologueTpl;
@@ -283,9 +303,6 @@ begin
 
     Patch(Jumper[JumperTplIndex1], Index);
     Patch(Jumper[JumperTplIndex2], Index);
-
-//    Patch(Jumper[JumperTplSlot1], DWord(SlotAddr));
-//    Patch(Jumper[JumperTplSlot2], DWord(SlotAddr));
 
     Patch(Jumper[JumperTplContSlot], DWord(@Jumper[JumperTplContAt]));
 
@@ -317,7 +334,7 @@ end;
 procedure InitModuleBounds;
 begin
   if Length(ProcModules) = 0 then
-    ProcModules := GetProcessModules;              
+    ProcModules := GetProcessModules;
 end;
 
 { TSavedRpnVar }
@@ -326,13 +343,13 @@ constructor TSavedRpnValue.Create(AValue: TRpnScalar);
 begin
   Value := AValue;
 end;
-                           
+
 { TAhHookedContext }
-                 
+
 class function TAhHookedContext.IsValidSavedName(const Name: WideString): Boolean;
 var
   I: Integer;
-begin             
+begin
   Result := False;
 
   for I := 1 to Length(Name) do
@@ -387,7 +404,7 @@ begin
   if CheckProcHookIndex('Context.Hook', FIndex) then
     Result := ProcHooks[FIndex];
 end;
-                                
+
 function TAhHookedContext.IndexOfArg(const Arg: String): Integer;
 const
   LowCapCount = 'Attempted to retrieve param #%d from procedure %s that only has %d parameters.';
@@ -402,7 +419,7 @@ begin
       LLErr(LowCapCount, [Result + 1, Hook.Proc, Length(Procs.Params[Hook.Proc])]);
       Result := -1;
     end;
-end;    
+end;
 
 function TAhHookedContext.GetArg(Arg: String): TRpnScalar;
 const
@@ -467,7 +484,7 @@ end;
 function TAhHookedContext.GetSaved(Name: WideString): TRpnScalar;
 var
   I: Integer;
-begin                              
+begin
   Result.Kind := [];
 
   if IsGlobalSave(Name) then
@@ -496,7 +513,7 @@ begin
     else
       LLErr(Error, [Name, RpnValueToStr(Value, NilRPN)]);
 end;
-                       
+
 procedure TAhHookedContext.SaveFile(Name: WideString; const Buf; Size: DWord);
 var
   Stream: TFileStreamW;
@@ -526,7 +543,7 @@ begin
   end;
 
   LLOnScriptLog(logInfo, 'Saving user file of %d bytes to %s...', [Size, Name]);
-  
+
   Stream := TFileStreamW.CreateCustom(Name, fmForcePath or fmShareDenyNone);
   try
     Stream.Write(Buf, Size);
@@ -593,13 +610,13 @@ begin
   ReInit := Length(ProcModules) > 0;
   InitModuleBounds;
 
-  Result := Find;                                   
+  Result := Find;
 
   if (Result = '') and ReInit then
-  begin          
+  begin
     SetLength(ProcModules, 0);
     InitModuleBounds;
-                       
+
     Result := Find;
   end;
 end;
@@ -669,7 +686,7 @@ asm
 
   PUSH  EAX
   PUSH  ECX
-                                        
+
   MOV   ECX, [ESP + RegistersSize + $10]
   PUSH  ECX
   MOV   ECX, [ESP + RegistersSize + $10]
@@ -688,7 +705,7 @@ end;
 procedure DoPreHook(const Registers: TAhRegisters; Index: Integer); stdcall;
 var
   Count: Integer;
-begin         
+begin
   with ProcHooks[Index] do
   begin
     if not CheckProcHookIndex('PreHook', Index) or
@@ -739,7 +756,7 @@ procedure DoPostHook(var Registers: TAhRegisters; Index: Integer; Caller: Pointe
 
 var
   Count: Integer;
-begin                       
+begin
   Registers.rEIP := DWord(Caller);
 
   with ProcHooks[Index] do
@@ -771,7 +788,7 @@ begin
           LLHookRunningError('post', Proc, E);
       end;
 
-    FreeAndNIL(Context);               
+    FreeAndNIL(Context);
     PrepareLeave;
 
     LLDbg('LEFT HOOK (index %d = %s)', [Index, Proc]);
@@ -805,9 +822,9 @@ begin
     LLDbg('Assigned proc hook ID %d; patched prologue at %.8X (OrigAddr), points to jumper at %.8X.',
           [ProcHookCount, DWord(OrigAddr), DWord(@Jumper[0])]);
   end;
-  
+
   Result := True;
-end;        
+end;
 
 function HookImportProc(var Hook: TProcHook): Boolean;
 begin
@@ -882,7 +899,6 @@ begin
     PrologueLength := Procs[ProcName].PrologueLength;
 
     OrigAddr := Addr;
-    SlotAddr := @Jumper[ Length(Jumper) - SizeOf(DWord) ];
 
     FillNewPrologueOf( ProcHooks[ProcHookCount] );
     FillJumperOf( ProcHooks[ProcHookCount] );
@@ -901,7 +917,7 @@ function UnhookPrologueProc(var Hook: TProcHook): Boolean;
   function RestorePrologue: Boolean;
   begin
     Result := False;
-    
+
     try
       PatchCopying(Hook.OrigAddr, @Hook.OrigPrologue[0], SizeOf(TPrologue));
 
@@ -912,7 +928,7 @@ function UnhookPrologueProc(var Hook: TProcHook): Boolean;
                BinToHex(Hook.OrigAddr^, SizeOf(TPrologue), ' '),
                BinToHex(Hook.OrigPrologue[0], SizeOf(TPrologue), ' ')]);
     except
-      on E: Exception do   
+      on E: Exception do
         LLErr('Exception while restoring prologue at %.8X - <%s> %s', [DWord(Hook.OrigAddr), E.ClassName, E.Message]);
     end;
   end;
@@ -956,7 +972,7 @@ begin
   if not VirtualProtect(Hook.OrigAddr, SizeOf(TPrologue), Hook.OldPageMode, @Hook.OldPageMode)
      and LLErr('Cannot undo VirtualProtect''ion of %s at address %.8X.', [Hook.Proc, DWord(Hook.OrigAddr)]) then
     Result := False;
-end;           
+end;
 
 function UnhookImportProc(var Hook: TProcHook): Boolean;
 begin
@@ -968,7 +984,7 @@ begin
   if not Result then
     LLDbg('Could not restore the Import Table record!', []);
 end;
-                    
+
 function UnhookProc(var Hook: TProcHook): Boolean;
 begin
   if Hook.Mode = hmPrologue then
@@ -1061,7 +1077,7 @@ end;
 procedure ResetLowLevel;
 var
   I: Integer;
-begin                 
+begin
   LLDbg('Resetting...', []);
 
   for I := 0 to ProcHookCount - 1 do
