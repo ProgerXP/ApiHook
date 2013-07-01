@@ -75,8 +75,10 @@ var
   LLOnScriptLog: TAhOnLog = NIL;
   LLUserFilePath: WideString = 'User\';
 
-// owns AScript and ACatalog.
-procedure InitLowLevel(AScript: TAhScript; ACatalog: TAhApiCatalog; const HookImageName: WideString);
+// Owns AScript and ACatalog - once acquired sets AScript/ACatalog to NIL. In case of
+// exception one can be acquired while another wasn't so free the other if it's not NIL.
+procedure InitLowLevel(var AScript: TAhScript; var ACatalog: TAhApiCatalog;
+  const HookImageName: WideString);
 procedure ResetLowLevel;
 function IsLowLevelInit: Boolean;
 
@@ -192,6 +194,25 @@ procedure LLDbg(const Str: WideString; Fmt: array of const);
 begin
   if Assigned(LLOnLog) then
     LLOnLog(logDebug, Str, Fmt);
+end;
+
+procedure SetModuleInfo(const Caption: WideString; Handle: HModule; out Base, Finish: DWord);
+const
+  Error = 'Error getting %s module information using GetModuleInformation(): (%d) %s';
+var
+  ModuleInfo: TModuleInfo;
+begin
+  if GetModuleInformation(GetCurrentProcess, Handle, @ModuleInfo, SizeOf(ModuleInfo)) then
+  begin
+    Base := DWord(ModuleInfo.lpBaseOfDll);
+    Finish := Base + ModuleInfo.SizeOfImage;
+  end
+    else
+    begin
+      LLErr(Error, [Caption, GetLastError, SysErrorMessage(GetLastError)]);
+      Base := 0;
+      Finish := 0;
+    end;
 end;
 
 procedure SetProcHookCount(Count: Integer);
@@ -800,11 +821,40 @@ begin
     LLDbg('Assigned proc hook ID %d; patched Import Table.', [ProcHookCount]);
 end;
 
-function HookProc(const ProcName: String): Boolean;
+function FindTarget(const Name: String; const Proc: TApiProcInfo): Pointer;
 const
-  GetAddrError = 'GetProcAddress(%s, %s) has failed.';
+  BeyondWarning = 'Warning: API proc %s''s address %.8X is beyond the end of base module''s (%s) address space (%.8X).';
 var
-  Lib: PChar;
+  Base, Finish: DWord;
+begin
+  Result := NIL;
+
+  if Proc.Addr <> DWord(-1) then
+  begin
+    Result := Pointer(Proc.Addr);
+
+    if Proc.Lib <> '' then
+    begin
+      SetModuleInfo('main', GetModuleHandle(NIL), Base, Finish);
+      Result := Pointer(DWord(Result) + Base);
+
+      if DWord(Result) > Finish then
+        LLErr(BeyondWarning, [Name, Result, Finish]);
+    end;
+  end
+    else if (GetModuleHandle(PChar(Proc.Lib)) = 0) and (LoadLibrary(PChar(Proc.Lib)) = 0) then
+      LLErr('LoadLibrary(%s) for %s has failed.', [Proc.Lib, Name])
+      else
+      begin
+        Result := GetProcAddress( GetModuleHandle(PChar(Proc.Lib)), PChar(Name) );
+
+        if Result = NIL then
+          LLErr('GetProcAddress(%s, %s) has failed.', [Proc.Lib, Name]);
+      end;
+end;
+
+function HookProc(const ProcName: String): Boolean;
+var
   Addr: Pointer;
 begin
   if HookIndexOf(ProcName) <> -1 then
@@ -816,14 +866,8 @@ begin
   LLDbg('Hooking %s...', [ProcName]);
   Result := False;
 
-  Lib := PChar(Procs[ProcName].Lib);
-
-  if (GetModuleHandle(Lib) = 0) and (LoadLibrary(Lib) = 0) and
-     LLErr('LoadLibrary(%s) has failed.', [String(Lib)]) then
-    Exit;
-
-  Addr := GetProcAddress( GetModuleHandle(Lib), PChar(ProcName) );
-  if (Addr = NIL) and LLErr(GetAddrError, [String(Lib), ProcName]) then
+  Addr := FindTarget(ProcName, Procs[ProcName]);
+  if Addr = NIL then
     Exit;
 
   if ProcHookCount >= Length(ProcHooks) then
@@ -936,21 +980,6 @@ end;
 { Exports }
 
 procedure InitVars(const HookImageName: WideString);
-  procedure SetModuleInfo(const Caption: WideString; Handle: HModule; out Base, Finish: DWord);
-  const
-    Error = 'Error getting %s module information using GetModuleInformation(): (%d) %s';   
-  var
-    ModuleInfo: TModuleInfo;
-  begin
-    if GetModuleInformation(GetCurrentProcess, Handle, @ModuleInfo, SizeOf(ModuleInfo)) then
-    begin
-      Base := DWord(ModuleInfo.lpBaseOfDll);
-      Finish := Base + ModuleInfo.SizeOfImage;
-    end
-      else
-        LLErr(Error, [Caption, GetLastError, SysErrorMessage(GetLastError)]);
-  end;
-
 var
   Modules: TProcessModules;
   I: Integer;
@@ -988,7 +1017,7 @@ begin
       end;
 end;
 
-procedure InitLowLevel(AScript: TAhScript; ACatalog: TAhApiCatalog; const HookImageName: WideString);
+procedure InitLowLevel(var AScript: TAhScript; var ACatalog: TAhApiCatalog; const HookImageName: WideString);
 var
   I: Integer;
 begin
@@ -999,6 +1028,7 @@ begin
     if Procs <> NIL then
       Procs.Free;
     Procs := ACatalog;
+    ACatalog := NIL;
   end
     else if (Procs = NIL) and LLErr('No ACatalog (Procs) passed to InitLowLevel.', []) then
       Exit;
@@ -1008,6 +1038,7 @@ begin
     if Script <> NIL then
       Script.Free;
     Script := AScript;
+    AScript := NIL;
   end
     else if (Script = NIL) and LLErr('No AScript passed to InitLowLevel.', []) then
       Exit;

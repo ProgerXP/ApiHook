@@ -43,7 +43,9 @@ type
 
   TApiProcInfo = class
   public
+    // If Lib = '' and Addr <> -1 it's absolute (typically within EXE's base addr).
     Lib, Call: String;
+    Addr: DWord;    // -1 = use GetProcAddress.
     PrologueLength: Integer;
     Return: TApiParamKind;
     ReturnHint: WideString;
@@ -67,8 +69,8 @@ type
     FParams: TObjectHash;   // of TApiParams.
 
     function LoadProc(const Name: String): Boolean;
-    function LoadInfoFrom(List: TStringsW): TApiProcInfo;
-    function LoadParamsFrom(List: TStringsW): TApiParams;
+    function LoadInfoFrom(List: TStringsW; const Name: String = '???'): TApiProcInfo;
+    function LoadParamsFrom(List: TStringsW; const Name: String = '???'): TApiParams;
 
     function ProcSection(const Name: String): String;
     function ParamsOf(const Proc: String): TApiParams;
@@ -235,8 +237,8 @@ begin
       Result := List.Count > 0;
       if Result then
       begin
-        FInfo.AddObject(Name, LoadInfoFrom(List));
-        FParams.AddObject(Name, LoadParamsFrom(List));
+        FInfo.AddObject(Name, LoadInfoFrom(List, Name));
+        FParams.AddObject(Name, LoadParamsFrom(List, Name));
       end;
     finally
       List.Free;
@@ -244,20 +246,29 @@ begin
   end;
 end;
 
-  function TAhApiCatalog.LoadInfoFrom(List: TStringsW): TApiProcInfo;
+  function TAhApiCatalog.LoadInfoFrom(List: TStringsW; const Name: String = '???'): TApiProcInfo;
+  var
+    Int: Integer;
   begin
     Result := TApiProcInfo.Create;
 
     Result.Lib := List.Values['Lib'];
     Result.Call := List.Values['Call'];
 
+    if List.IndexOfName('Addr') = -1 then
+      Result.Addr := DWord(-1)
+      else if TryStrToInt('$' + List.Values['Addr'], Int) then
+        Result.Addr := DWord(Int)   // casting signed to unsigned.
+        else
+          raise AhEx.CreateFmt('Addr of API proc %s is not a valid hexadecimal number: %s.', [Name, List.Values['Addr']]);
+
     if not TryStrToInt(List.Values['Prologue'], Result.PrologueLength) then
-      Result.PrologueLength := 0; 
+      Result.PrologueLength := 0;
 
     Result.Return := TApiParams.StrToKindHinting( List.Values['Return'], Result.ReturnHint );
   end;
 
-  function TAhApiCatalog.LoadParamsFrom(List: TStringsW): TApiParams;
+  function TAhApiCatalog.LoadParamsFrom(List: TStringsW; const Name: String = '???'): TApiParams;
   var
     I: Integer;      
     SkipNext: Boolean;

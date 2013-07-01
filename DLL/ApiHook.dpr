@@ -435,10 +435,9 @@ begin
   LLOnScriptLog := Self.Log;
   LLUserFilePath := IncludeTrailingPathDelimiter(FUserPath);
 
+  // LowLevel will set FScript and/or FCatalog to NIL once it owns them.
   InitLowLevel(FScript, FCatalog, FSettings.HookModule);
-  FScript := NIL;
-  FCatalog := NIL;
-  
+
   {$IFDEF AhDebug}
     CallDebugProcs;
   {$ENDIF}
