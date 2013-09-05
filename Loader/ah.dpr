@@ -67,7 +67,7 @@ type
 
     function TryDoingTask(Task: WideString): Boolean; override;
     function Launch(const DLL, EXE: WideString): Boolean;
-      function GetLdrSettings: TAhSettings;                     
+      function GetLdrSettings: TAhSettings;
     function Attach(const DLL, Process: WideString): Boolean;
     function Inject(const DLL, EXE: WideString): Boolean;
     function AttachToSelf(const DLL: WideString): Boolean;
@@ -603,7 +603,7 @@ end;
         finally
           Stream.Free;
         end;
-                                                
+
         if NewSize - LastPos > MaxTail then
           Tail := Tail + '...';
         CallOnEachLineIn(Tail, WatchLogLine);
@@ -712,7 +712,7 @@ begin
 
   Flags := GetFlagOpt('open-flags', 0, THREAD_QUERY_INFORMATION or THREAD_SUSPEND_RESUME or THREAD_TERMINATE);
   Result.Thread := MainThreadHandleOf(Result.ProcessID, Flags);
-  
+
   if Result.Thread = 0 then
     FLang.RaiseText('error: attach: cannot get thread', [Result.ProcessID]);
 end;
@@ -771,7 +771,7 @@ end;
 
 function TApiHookApp.InjectAndPipe(const Proc: TAhProcInfo; const DLL: WideString;
   const LdrData: TLoaderData): Boolean;
-begin                                         
+begin
   Result := InjectInto(Proc, DLL, LdrData);
   EnterPipeLoop(Proc);
 end;
@@ -785,7 +785,7 @@ begin
   if not FileExists(DLL) then
     FLang.RaiseText('error: launch: no lib', [DLL]);
 
-  Flags := GetFlagOpt('open-flags', 0, PROCESS_QUERY_INFORMATION or PROCESS_CREATE_THREAD or PROCESS_VM_OPERATION or PROCESS_VM_WRITE);
+  Flags := GetFlagOpt('open-flags', 0, PROCESS_QUERY_INFORMATION or PROCESS_CREATE_THREAD or PROCESS_VM_OPERATION or PROCESS_VM_READ or PROCESS_VM_WRITE);
 
   Handle := OpenProcess(Flags, False, Proc.ProcessID);
   if Handle = 0 then
@@ -863,7 +863,7 @@ end;
   var
     Written: DWord;
   begin
-    Result := VirtualAllocEx(Proc, NIL, Size, MEM_COMMIT, PAGE_READWRITE);
+    Result := VirtualAllocEx(Proc, NIL, Size, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
 
     if Result = NIL then
       FLang.RaiseText('error: attach: VirtualAllocEx', [Size, SysErrorMsg]);
