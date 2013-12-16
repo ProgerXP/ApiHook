@@ -130,17 +130,3 @@ OriginalFilename=
 ProductName=
 ProductVersion=1.0.0.0
 Comments=
-[HistoryLists\hlUnitAliases]
-Count=1
-Item0=WinTypes=Windows;WinProcs=Windows;DbiTypes=BDE;DbiProcs=BDE;DbiErrs=BDE;
-[HistoryLists\hlSearchPath]
-Count=3
-Item0=..\Lib;..\Lib\FastShareMem;..\..\..\Minversys\Lib\D7X\Classes;..\..\..\Minversys\Lib\D7X\Functions
-Item1=$(DELPHI)\Lib\Debug;..\Lib;..\Lib\FastShareMem;..\..\..\Minversys\Lib\D7X\Classes;..\..\..\Minversys\Lib\D7X\Functions
-Item2=..\..\Classes;..\..\Functions
-[HistoryLists\hlUnitOutputDirectory]
-Count=1
-Item0=..\DCU
-[HistoryLists\hlOutputDirectorry]
-Count=1
-Item0=..

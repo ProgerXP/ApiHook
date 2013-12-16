@@ -94,7 +94,7 @@ OutputDir=
 UnitOutputDir=
 PackageDLLOutputDir=
 PackageDCPOutputDir=
-SearchPath=..\Lib;..\Lib\FastShareMem;..\..\..\Minversys\Lib\D7X\Classes;..\..\..\Minversys\Lib\D7X\Functions
+SearchPath=..\Lib;..\Lib\FastShareMem;..\Lib\D7X\Units
 Packages=vclx;vcl;rtl;VclSmp;vclshlctrls;vclactnband;dsnapcon;dsnap;dbrtl;vcldb;adortl;bdertl;vcldbx;ibxpress;teeui;teedb;tee;dss;visualclx;visualdbclx;tsvnWizard_D7
 Conditionals=
 DebugSourceDirs=
@@ -130,22 +130,3 @@ OriginalFilename=
 ProductName=
 ProductVersion=1.0.0.0
 Comments=
-[Excluded Packages]
-c:\program files\borland\delphi7\Projects\Bpl\Components.bpl=D7X Components
-c:\program files\borland\delphi7\Projects\Bpl\dclusr70.bpl=Borland User Components
-C:\WINDOWS\system32\ibevnt70.bpl=Borland Interbase Event Alerter Component
-[HistoryLists\hlUnitAliases]
-Count=1
-Item0=WinTypes=Windows;WinProcs=Windows;DbiTypes=BDE;DbiProcs=BDE;DbiErrs=BDE;
-[HistoryLists\hlSearchPath]
-Count=7
-Item0=..\Lib;..\Lib\FastShareMem;..\..\..\Minversys\Lib\D7X\Classes;..\..\..\Minversys\Lib\D7X\Functions
-Item1=..;..\FastShareMem;..\..\..\Minversys\Lib\D7X\Classes;..\..\..\Minversys\Lib\D7X\Functions
-Item2=..;..\FastShareMem;..\..\..\Minversys\Lib\D7X\Classes
-Item3=..;..\FastShareMem;..\..\..\Minversys\Lib\D7X
-Item4=..;..\FastShareMem
-Item5=..
-Item6=..\..\Classes;..\..\Functions
-[HistoryLists\hlOutputDirectorry]
-Count=1
-Item0=..

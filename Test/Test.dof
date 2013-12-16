@@ -134,12 +134,3 @@ Comments=
 c:\program files\borland\delphi7\Projects\Bpl\Components.bpl=D7X Components
 c:\program files\borland\delphi7\Projects\Bpl\dclusr70.bpl=Borland User Components
 C:\WINDOWS\system32\ibevnt70.bpl=Borland Interbase Event Alerter Component
-[HistoryLists\hlUnitAliases]
-Count=1
-Item0=WinTypes=Windows;WinProcs=Windows;DbiTypes=BDE;DbiProcs=BDE;DbiErrs=BDE;
-[HistoryLists\hlSearchPath]
-Count=1
-Item0=..\..\Classes;..\..\Functions
-[HistoryLists\hlOutputDirectorry]
-Count=1
-Item0=..
