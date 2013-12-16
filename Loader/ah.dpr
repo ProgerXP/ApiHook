@@ -312,7 +312,7 @@ begin
   Version := AhVersion;
   Author := 'Proger_XP';
   WWW := AhHomePage;
-  BuildDate := $20052013;
+  BuildDate := $20131216;
 
   Help := FLang['help'];
   HelpDetails := FLang['help details'];

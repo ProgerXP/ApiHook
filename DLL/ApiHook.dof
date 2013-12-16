@@ -94,13 +94,13 @@ OutputDir=..\Out
 UnitOutputDir=..\DCU
 PackageDLLOutputDir=
 PackageDCPOutputDir=
-SearchPath=..\Lib;..\Lib\FastShareMem;..\..\..\Minversys\Lib\D7X\Classes;..\..\..\Minversys\Lib\D7X\Functions
+SearchPath=..\Lib;..\Lib\FastShareMem;..\Lib\D7X\Units
 Packages=vclx;vcl;rtl;VclSmp;vclshlctrls;vclactnband;dsnapcon;dsnap;dbrtl;vcldb;adortl;bdertl;vcldbx;ibxpress;teeui;teedb;tee;dss;visualclx;visualdbclx;tsvnWizard_D7
 Conditionals=AhDebug1
 DebugSourceDirs=
 UsePackages=0
 [Parameters]
-RunParams=l n --suspend=0 --module=explorer
+RunParams=s script
 HostApplication=C:\Program Files\Borland\Delphi7\Projects\!VN hack\ApiHook\Out\ah.exe
 Launcher=
 UseLauncher=0
@@ -109,11 +109,11 @@ DebugCWD=
 IncludeVerInfo=1
 AutoIncBuild=0
 MajorVer=0
-MinorVer=84
+MinorVer=85
 Release=0
 Build=0
 Debug=0
-PreRelease=1
+PreRelease=0
 Special=0
 Private=0
 DLL=1
@@ -122,7 +122,7 @@ CodePage=1252
 [Version Info Keys]
 CompanyName=
 FileDescription=Sophisticated API hooking tool. Homepage: http://proger.i-forge.net/ApiHook
-FileVersion=0.84.0.0
+FileVersion=0.85.0.0
 InternalName=
 LegalCopyright=In public domain by Proger_XP
 LegalTrademarks=
@@ -130,34 +130,3 @@ OriginalFilename=
 ProductName=
 ProductVersion=1.0.0.0
 Comments=
-[Excluded Packages]
-C:\Program Files\Borland\Delphi7\Projects\Bpl\IndyCore70.bpl=Indy 10 Core
-C:\Program Files\Borland\Delphi7\Projects\Bpl\IndySystem70.bpl=Indy 10 System
-C:\Program Files\Borland\Delphi7\Projects\Bpl\IndyProtocols70.bpl=Indy 10 Protocols
-c:\program files\borland\delphi7\Projects\Bpl\Components.bpl=D7X Components
-c:\program files\borland\delphi7\Projects\Bpl\dclusr70.bpl=Borland User Components
-C:\WINDOWS\system32\ibevnt70.bpl=Borland Interbase Event Alerter Component
-[HistoryLists\hlConditionals]
-Count=2
-Item0=AhDebug1
-Item1=AhDebug
-[HistoryLists\hlUnitAliases]
-Count=1
-Item0=WinTypes=Windows;WinProcs=Windows;DbiTypes=BDE;DbiProcs=BDE;DbiErrs=BDE;
-[HistoryLists\hlSearchPath]
-Count=8
-Item0=..\Lib;..\Lib\FastShareMem;..\..\..\Minversys\Lib\D7X\Classes;..\..\..\Minversys\Lib\D7X\Functions
-Item1=$(DELPHI)\Lib\Debug;..\Lib;..\Lib\FastShareMem;..\..\..\Minversys\Lib\D7X\Classes;..\..\..\Minversys\Lib\D7X\Functions
-Item2=..;..\FastShareMem;..\..\..\Minversys\Lib\D7X\Classes;..\..\..\Minversys\Lib\D7X\Functions
-Item3=..;..\FastShareMem;..\..\..\Minversys\Lib\D7X\Classes
-Item4=..;..\FastShareMem;..\..\..\Minversys\Lib\D7X
-Item5=..;..\FastShareMem
-Item6=..
-Item7=..\..\Classes;..\..\Functions
-[HistoryLists\hlUnitOutputDirectory]
-Count=1
-Item0=..\DCU
-[HistoryLists\hlOutputDirectorry]
-Count=2
-Item0=..\Out
-Item1=..

@@ -128,7 +128,7 @@ type
   end;
 
 const
-  AhVersion   = $0054;
+  AhVersion   = $0055;
   AhHomePage  = 'http://proger.i-forge.net/ApiHook';
 
   NilRPN      = '<NIL>';
