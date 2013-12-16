@@ -488,6 +488,8 @@ end;
           else
           begin
             DLL := 'ApiHook.dll';
+            if not FileExists(DLL) then
+              DLL := ExtractFilePath(ParamStrW(0)) + '\' + DLL;
             Log(logDebug, 'ack: --lib', [DLL]);
           end;
 
@@ -1163,4 +1165,3 @@ begin
     App.Free;
   end;
 end.
-

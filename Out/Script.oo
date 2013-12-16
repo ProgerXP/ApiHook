@@ -2,3 +2,6 @@
 ; http://proger.i-forge.net/ApiHook
 [CreateFileW]
   log Opening :fn.
+  save fn
+. save <H2FN ^ x fmt cat up> ^fn
+  log :EIP:x :fn

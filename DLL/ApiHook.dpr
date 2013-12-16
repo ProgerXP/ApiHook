@@ -35,7 +35,7 @@ type
 
     function DoRead(const Cmd: WideString): Boolean; override;
     procedure DoReport(Msg: WideString; Fmt: array of const); override;
-    
+
     procedure WriteLog(var Log: TStream; var LogFN: WideString;
       Msg: WideString; Fmt: array of const);
 
@@ -53,7 +53,7 @@ type
     property LogErrorFN: WideString read FLogErrorFN write SetLogErrorFN;
     property LogDataFN: WideString read FLogDataFN write SetLogDataFN;
 
-    procedure ReportData(Msg: WideString; Fmt: array of const); override;                                      
+    procedure ReportData(Msg: WideString; Fmt: array of const); override;
     procedure PipeIsClosing; override;
   end;
 
@@ -84,7 +84,7 @@ type
 
     property Settings: TAhSettings read FSettings;
 
-    procedure Log(Level: TAhLogLevel; Msg: WideString; Fmt: array of const);      
+    procedure Log(Level: TAhLogLevel; Msg: WideString; Fmt: array of const);
     procedure LowLevelLog(Level: TAhLogLevel; Msg: WideString; Fmt: array of const);
     procedure Debug(const Msg: WideString; Fmt: array of const);
     procedure Error(const Msg: WideString; Fmt: array of const);
@@ -94,7 +94,7 @@ type
     { Pipe-invoked commands }
     procedure CmdSetLogs(const Logs: WideString);
     procedure CmdUserPath(const Path: WideString);
-    procedure CmdCatalog(const Catalog: WideString);   
+    procedure CmdCatalog(const Catalog: WideString);
     procedure CmdScript(const Script: WideString);
     procedure CmdDetach;
     procedure CmdShutdown(QuitHost: Boolean);
@@ -102,7 +102,7 @@ type
 
 {$R *.res}
 
-type                  
+type
   TLogQueueItem = class
   public
     Level: TAhLogLevel;
@@ -219,7 +219,7 @@ begin
 end;
 
 function TAhLibPipe.ReceiveThread(Caller: TObject; const Arguments: TProcArguments): DWord;
-begin                    
+begin
   while not FExitThread do
     try
       Read;
@@ -266,7 +266,7 @@ begin
       if (Level = logError) and (Msg = MaxError) then
         // this trick puts the message in front of others so it gets to the loader's
         // console output on the next update; otherwise it's a good chance that next
-        // log messages overflow will erase it without a trace. 
+        // log messages overflow will erase it without a trace.
         TObjectStack(FLogQueue).Push( TLogQueueItem.Create(Level, NewMsg, NewFmt) )
         else
           FLogQueue.Push( TLogQueueItem.Create(Level, NewMsg, NewFmt) );
@@ -321,7 +321,7 @@ end;
 procedure TAhLibPipe.SetLogErrorFN(const Value: WideString);
 begin
   FLogErrorFN := Value;
-  
+
   if FLogError <> NIL then
     FreeAndNIL(FLogError);
 end;
@@ -343,7 +343,7 @@ end;
 { TAhHookLib }
 
 constructor TAhHookLib.Create(const Settings: TAhSettings);
-begin                          
+begin
   Randomize;
 
   FIsInitialized := False;
@@ -355,7 +355,7 @@ end;
 
 function TAhHookLib.Bootstrap: Boolean;
 begin
-  Result := FPipe = NIL;     
+  Result := FPipe = NIL;
 
   if Result then
   begin
@@ -368,7 +368,7 @@ begin
         FPipe := NIL;
 
     FPipeThread := NIL;
-                             
+
     if FPipe <> NIL then
     begin
       Debug('Starting pipe thread...', []);
@@ -413,7 +413,7 @@ begin
   except
     asm nop end;   // to catch Format %char errors in code.
   end;
-      
+
   FLogs.Log(Level, Msg, Fmt);
 
   if FPipe <> NIL then
@@ -452,7 +452,7 @@ procedure TAhHookLib.DetachPipe;
 begin
   if FPipe <> NIL then
     FPipe.ExitThread := True;
-       
+
   // even if FPipe and FPipeThread are not freed here they'll be freed on App.Destroy.
   if (FPipeThread <> NIL) and not FPipeThread.IsCurrent then
   begin
@@ -519,7 +519,7 @@ begin
   try
     try
       Ini.LoadFromString(Catalog);
-      
+
       if FCatalog <> NIL then
         FCatalog.Free;
 
@@ -541,7 +541,7 @@ begin
     FScript.Free;
 
   try
-    FScript := TAhScript.Create(Script); 
+    FScript := TAhScript.Create(Script);
     Hook;
   except
     on E: Exception do
@@ -602,7 +602,7 @@ begin
     Exit;
   end;
 
-  try                       
+  try
     Result := App.Bootstrap;
   except
     on E: Exception do
@@ -611,7 +611,7 @@ begin
 end;
 
 procedure Shutdown; stdcall;
-begin                    
+begin
   OutputDebugString('ApiHook Shutdown export procedure called.');
 
   if App <> NIL then
@@ -625,7 +625,7 @@ procedure PipeLoop; stdcall;
 begin
   OutputDebugString('ApiHook PipeLoop export procedure called.');
 
-  if (App <> NIL) and (App.FPipe <> NIL) then  
+  if (App <> NIL) and (App.FPipe <> NIL) then
     try
       App.FPipe.ReceiveThread(NIL, NIL);
     except
@@ -651,6 +651,7 @@ exports
 
 begin
   DLLProc := DllEvent;
+  IsMultiThread := True;
   DLLProc(DLL_PROCESS_ATTACH);
 end.
 

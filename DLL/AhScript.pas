@@ -6,7 +6,7 @@ uses Contnrs, Classes, Windows, SysUtils, Math, CallbackHash, IniFilesW, Strings
      RPNit, StringUtils, Utils, AhCommon;
 
 type
-  TAhAction = class;                     
+  TAhAction = class;
   TAhScript = class;
   TAhActionClass = class of TAhAction;
 
@@ -18,7 +18,7 @@ type
   TAhGetArg = function (Arg: String): TRpnScalar of object;
   TAhGetResult = function: TRpnScalar of object;
   TAhGetSaved = function (Name: WideString): TRpnScalar of object;
-  TAhSetSaved = procedure (Name: WideString; const Value: TRpnScalar) of object;   
+  TAhSetSaved = procedure (Name: WideString; const Value: TRpnScalar) of object;
   TAhGetProcName = function: String of object;
   TAhSaveFile = procedure (Name: WideString; const Buf; Size: DWord) of object;
   TAhGetConstName = function (Arg: String): WideString of object;
@@ -45,7 +45,7 @@ type
   end;
 
   TAhScriptProc = class
-  protected                                       
+  protected
     FHookMode: THookMode;
     FActions: TObjectList;  // of TAhAction.
 
@@ -65,7 +65,7 @@ type
   end;
 
   TAhScript = class
-  protected                                            
+  protected
     FConsts: TAhConstants;
     FProcs: TObjectHash;      // of TAhScriptProc.
     FRpnSettings: TRpnCompSettings;
@@ -83,9 +83,9 @@ type
   public
     constructor Create(const Str: WideString);
     destructor Destroy; override;
-    
+
     property Consts: TAhConstants read FConsts;
-                                             
+
     property RpnSettings: TRpnCompSettings read FRpnSettings write FRpnSettings;
 
     function ProcCount: Integer;
@@ -134,7 +134,7 @@ type
     constructor Create(const Args: WideString; Owner: TAhScript = NIL);
     destructor Destroy; override;
 
-    property RunPhases: TAhRunPhases read FPhases write FPhases;      
+    property RunPhases: TAhRunPhases read FPhases write FPhases;
     function GetRpnSettings: TRpnCompSettings;
 
     function PerformIn(Context: TAhContext): Boolean; virtual;
@@ -405,7 +405,7 @@ var
     end;
   end;
 
-  function GetResultOrVar: WideString;   
+  function GetResultOrVar: WideString;
   var
     IsEsc: Boolean;
   begin
@@ -477,7 +477,7 @@ begin
 
   StrPos := I;
 end;
-                     
+
 function ExpandAhRpnString(Context: TAhContext; const Str: WideString;
   const Settings: TRpnCompSettings): WideString;
 var
@@ -499,7 +499,7 @@ end;
 { TAhRpnVarList }
 
 constructor TAhRpnVarList.Create(Context: TAhContext);
-begin                 
+begin
   inherited Create;
   FContext := Context;
 end;
@@ -533,7 +533,7 @@ end;
 function TAhRpnVarList.FunctionVar(Eval: TRpnEvaluator; const Name: WideString; out Value: TRpnScalar): Boolean;
 begin
   Value.Kind := [];
-  
+
   Result := BitwiseFunc(Eval, Name, Value) or
             BoolFunc(Eval, Name, Value) or
             StringFunc(Eval, Name, Value) or
@@ -577,7 +577,7 @@ begin
             Value := RpnNum(Trunc(A) or Trunc(Eval.Stack.PopInt))
             else if Name = '^' then
               Value := RpnNum(Trunc(A) xor Trunc(Eval.Stack.PopInt));
-  end;                
+  end;
 end;
 
 function TAhRpnVarList.BoolFunc(Eval: TRpnEvaluator; const Name: WideString; out Value: TRpnScalar): Boolean;
@@ -597,31 +597,6 @@ function TAhRpnVarList.BoolFunc(Eval: TRpnEvaluator; const Name: WideString; out
       if (Num = Value.Num) and (Bool = Value.Bool) then
         raise EInvalidRpnOperation.Create(Error, [RpnKindToStr(Kind)]);
     end;
-  end;
-
-  function AreEqu(A, B: TRpnScalar): Boolean;
-  const
-    Error = 'SQU/NEQ functions: if both operands are set they can only be used on 5 combinations' +
-            ' of operands: num-num, bool-bool, str-str, bytes-bytes or num-str/str-num.' +
-            ' If one or both operands are unset (NIL) EQU returns TRUE if they are both NIL' +
-            ' or FALSE otherwise. Given operand types in this expression: A (%s) = %s, B (%s) = %s.';
-  begin
-    if [valBool] * A.Kind * B.Kind <> [] then
-      Result := A.Bool = B.Bool
-      else if [valNum] * A.Kind * B.Kind <> [] then
-        Result := A.Num = B.Num
-        else if [valBytes] * A.Kind * B.Kind <> [] then
-          Result := (Length(A.Bytes) = Length(B.Bytes)) and CompareMem( @A.Bytes[1], @B.Bytes[1], Length(A.Bytes) )
-          else if [valStr] * A.Kind * B.Kind <> [] then
-            Result := A.Str = B.Str
-            else if ((valNum in A.Kind) and (valStr in B.Kind)) or
-                    ((valNum in B.Kind) and (valStr in A.Kind)) then
-              Result := RpnValueToStr(A, NilRPN) = RpnValueToStr(B, NilRPN)
-              else if (A.Kind = []) or (B.Kind = []) then
-                Result := (A.Kind = []) and (B.Kind = [])
-                else
-                  raise EInvalidRpnOperation.Create(Error, [RpnValueToStr(A, NilRPN), RpnKindToStr(A.Kind),
-                                                            RpnValueToStr(B, NilRPN), RpnKindToStr(B.Kind)]);
   end;
 
 const
@@ -655,7 +630,7 @@ begin
           else if (Name = 'EQU') or (Name = 'NEQ') then
           begin
             Value := Eval.Stack.Pop;
-            Value := RpnBool( AreEqu(Eval.Stack.Pop, Value) );
+            Value := RpnBool( CompareRpnValues(Eval.Stack.Pop, Value) );
 
             if Name = 'NEQ' then
               Value.Bool := not Value.Bool;
@@ -679,7 +654,7 @@ end;
 function TAhRpnVarList.StringFunc(Eval: TRpnEvaluator; const Name: WideString; out Value: TRpnScalar): Boolean;
 const
   FmtError    = 'FMT function expects a single format character on top of stack, "%s" string given.';
-  PosError    = 'POS function works on str-str and bytes-bytes needle (%s) and haystack (%s).';      
+  PosError    = 'POS function works on str-str and bytes-bytes needle (%s) and haystack (%s).';
   PosiError   = 'POSI function works on str-str needle (%s) and haystack (%s).';
   CatFewArgs  = 'CAT function requires at least 2 arguments on top of the stack, %d found.';
 var
@@ -707,10 +682,10 @@ begin
           Sub := Eval.Stack.Pop;
           Value := Eval.Stack.Pop;
 
-          if Name = 'posi' then                            
+          if Name = 'posi' then
             if [valStr] * Sub.Kind * Value.Kind <> [] then
               Value := RpnNum( PosW(LowerCase(Sub.Str), LowerCase(Value.Str)) - 1 )
-              else                 
+              else
                 raise AhEx.CreateFmt(PosiError, [RpnKindToStr(Sub.Kind), RpnKindToStr(Value.Kind)])
             else if [valStr] * Sub.Kind * Value.Kind <> [] then
               Value := RpnNum( PosW(Sub.Str, Value.Str) - 1 )
@@ -733,7 +708,7 @@ begin
 
             if Eval.Stack.Count < 2 then
               raise AhEx.CreateFmt(CatFewArgs, [Eval.Stack.Count]);
-                                     
+
             Value := RpnStr('');
             for Max := Max downto 1 do
               Value.Str := Eval.Stack.PopStr + Value.Str;
@@ -780,7 +755,7 @@ begin
       begin
         if not Eval.Stack.Reverse then
           raise AhEx.Create('REV function requires a non-empty stack.');
-          
+
         Value := Eval.Stack.Pop;
       end
         else if Name = 'load' then
@@ -789,7 +764,7 @@ begin
           begin
             SetLength(Consts, 1);
             Consts[0] := '*';
-            
+
             Value := RpnStr( FCOntext.ConstsByValue(Eval.Stack.Pop, Consts, Name = 'constset') );
 
             if Name = 'const' then
@@ -824,7 +799,7 @@ begin
   FProcs.Clear;
   if LoadConsts then
     FConsts.Clear;
-               
+
   FParseConsts := LoadConsts;
   FParsing := pActions;
 
@@ -1022,7 +997,7 @@ begin
 end;
 
 { TAhAction }
-                 
+
 class function TAhAction.Name: WideString;
 begin
   Result := Copy(ClassName, 2, Length(ClassName) - 7);    // T...Action
@@ -1185,11 +1160,11 @@ begin
     end;
 end;
 
-procedure TSaveAction.MultipleArgSave;     
+procedure TSaveAction.MultipleArgSave;
 const
   Error = 'Wrong Save action syntax: all but the last var+arg parameters must end on' +
           ' comma; given parameter string: %s';
-var                                        
+var
   Args: TWideStringArray;
   I: Integer;
 begin
@@ -1330,7 +1305,7 @@ begin
       Addr := PDWord(ESP + I * 4)^;
       Msg := Msg + IntToHex(Addr, 8);
 
-      Module := FContext.ModuleNameOfAddr(Addr);               
+      Module := FContext.ModuleNameOfAddr(Addr);
       if Module <> '' then
         if Module = ParamStrW(0) then
           Msg := Msg + ' [SELF]'

@@ -653,6 +653,19 @@ asm
   MOV   TAhRegisters[ESP+4].rEDI, EDI
 end;
 
+procedure RestoreRegisters;
+asm
+  { EIP and ESP are skipped }
+
+  MOV   EAX, TAhRegisters[ESP+4].rEAX
+  MOV   ECX, TAhRegisters[ESP+4].rECX
+  MOV   EDX, TAhRegisters[ESP+4].rEDX
+  MOV   EBX, TAhRegisters[ESP+4].rEBX
+  MOV   EBP, TAhRegisters[ESP+4].rEBP
+  MOV   ESI, TAhRegisters[ESP+4].rESI
+  MOV   EDI, TAhRegisters[ESP+4].rEDI
+end;
+
 procedure PreHook;
 asm
   { Input:  ESP+4 - proc hook index }
@@ -671,7 +684,8 @@ asm
 
   POP   ECX
   POP   EAX
-
+                         
+  CALL  RestoreRegisters
   ADD   ESP, RegistersSize
   RET   4
 end;
@@ -698,6 +712,7 @@ asm
   POP   ECX
   POP   EAX
 
+  CALL  RestoreRegisters
   ADD   ESP, RegistersSize
   RET   4
 end;
