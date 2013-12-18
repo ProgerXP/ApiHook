@@ -215,7 +215,7 @@ end;
 function AhSettings(UseCriticalSections: TAhCritSectionMode; UseThreads: Boolean; const Pipe: String;
   const HookModule: WideString = ''): TAhSettings;
 begin
-  ZeroMemory(@Result, SizeOf(Result));
+  FillChar(Result, SizeOf(Result), 0);
 
   Result.UseCriticalSections := UseCriticalSections;
   Result.UseThreads := UseThreads;

@@ -1221,7 +1221,7 @@ begin
 
   GetMem(Buf, ATo);
   try
-    CopyMemory(Buf, Pointer(AFrom), ATo);
+    Move(Pointer(AFrom)^, Buf^, ATo);
     FContext.SaveFile(Name, Buf^, ATo);
   finally
     FreeMem(Buf, ATo);

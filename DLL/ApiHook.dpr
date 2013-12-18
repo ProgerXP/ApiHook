@@ -130,7 +130,7 @@ begin
   FApp := App;
   FExitThread := False;
 
-  ZeroMemory(@FData, SizeOf(FData));
+  FillChar(FData, SizeOf(FData), 0);
   FData.MinLogLevel := logInfo;
 
   FLogError := NIL;
@@ -445,7 +445,7 @@ end;
 
 procedure TAhHookLib.Unhook;
 begin
-  ResetLowLevel;
+  ResetLowLevel;    
 end;
 
 procedure TAhHookLib.DetachPipe;

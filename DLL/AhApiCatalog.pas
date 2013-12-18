@@ -340,7 +340,7 @@ var
   Name, Kind, Consts: WideString;
   Aliases: TWideStringArray;
 begin
-  ZeroMemory(@Result, SizeOf(Result));
+  FillChar(Result, SizeOf(Result), 0);
   Split(Str, '=', Name, Kind);
 
   if Split(Kind, '=', Kind, Consts) then
