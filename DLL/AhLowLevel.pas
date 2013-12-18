@@ -2,7 +2,8 @@ unit AhLowLevel;
 
 interface
 
-uses PsAPI, Windows, SysUtils, StringUtils, RPNit, StringsW, FileStreamW, Utils,
+uses PsAPI, Windows, SysUtils, Math,
+     StringUtils, RPNit, StringsW, FileStreamW, ProcUtils, Utils,
      AhCommon, AhApiCatalog, AhScript;
 
 type
@@ -14,14 +15,18 @@ type
   TProcHook = record
     Index: Integer;
     Proc: String;
-
     Mode: THookMode;
 
     PrologueLength: Byte;
     VarPrologue: array[0..127] of Byte;
     VarProloguePtr: Pointer;
 
-    CritSectionInitialized: Integer;
+    // Number of threads (callers) that are currently inside a Pre/Post handler or
+    // are waiting to acquire the critical section object.
+    ActiveCount: Integer;
+    // Is True when ActiveCount > 0 and UnhookProc waits for handlers to finish before
+    // destroying this hook data.
+    Unhooking: Integer;
     CritSection: TRTLCriticalSection;
     Context: TAhHookedContext;    // NIL when hook isn't executing.
 
@@ -243,7 +248,7 @@ begin
   SetLength(ProcHooks, Count);
 
   if Count > OldCount then
-    ZeroMemory(@ProcHooks[OldCount], (Count - OldCount) * SizeOf(TProcHook));
+    FillChar(ProcHooks[OldCount], (Count - OldCount) * SizeOf(TProcHook), 0);
 
   if ProcHookCount > Count then
     ProcHookCount := Count;
@@ -263,16 +268,6 @@ begin
       Exit;
 
   Result := -1;
-end;
-
-procedure PatchCopying(Dest: Pointer; Source: Pointer; Length: Integer);
-begin
-  CopyMemory(Dest, Source, Length);
-end;
-
-procedure Patch(var Dest; Data: DWord);
-begin
-  DWord(Dest) := Data;
 end;
 
 procedure FillNewPrologueOf(var Hook: TProcHook);
@@ -721,42 +716,44 @@ procedure DoPreHook(const Registers: TAhRegisters; Index: Integer); stdcall;
 var
   Count: Integer;
 begin
+  if not CheckProcHookIndex('PreHook', Index) then
+    Exit;
+
   with ProcHooks[Index] do
   begin
-    if not CheckProcHookIndex('PreHook', Index) or
-      // optimization to avoid entering critical section on local calls - without it and
-      // with loader <-> library pipe attached this will fail with AV rather quickly.
-      ( (Mode = hmPrologue) and (PrologueLength > 0) and SkipHookedCaller(Registers.rEIP) ) then
+    // optimization to avoid entering critical section on local calls - without it and
+    // with loader <-> library pipe attached this will fail with AV rather quickly.
+    if (Mode = hmPrologue) and (PrologueLength > 0) and SkipHookedCaller(Registers.rEIP) then
       Exit;
+
+    InterlockedIncrement(ActiveCount);
 
     case LLUseCritSect of
     csGlobal:
       EnterCriticalSection(GlobalCritSection);
     csPerProc:
-      begin
-        if InterlockedExchange(CritSectionInitialized, 1) = 0 then
-          InitializeCriticalSection(CritSection);
-        EnterCriticalSection(CritSection);
-      end;
+      EnterCriticalSection(CritSection);
     end;
 
     if (Mode = hmPrologue) and (PrologueLength = 0) then
       PatchCopying(OrigAddr, @OrigPrologue[0], SizeOf(TPrologue));
 
-    if SkipHookedCaller(Registers.rEIP) then
+    if SkipHookedCaller(Registers.rEIP) or (InterlockedExchangeAdd(Unhooking, 0) <> 0) then
+    begin
+      LLDbg('PREMATURE LEAVE PRE (index %d = %s).', [Index, Proc]);
       Exit;
+    end;
 
     LLDbg('PRE HOOK (index %d = %s).', [Index, Proc]);
-
     Context := TAhHookedContext.Create(Index, Registers);
 
-      try
-        Count := Script.RunActionsOf(Proc, Context.Bindings, [raPre]);
-        LLDbg('ran %d pre-actions.', [Count]);
-      except
-        on E: Exception do
-          LLHookRunningError('pre', Proc, E);
-      end;
+    try
+      Count := Script.RunActionsOf(Proc, Context.Bindings, [raPre]);
+      LLDbg('ran %d pre-actions.', [Count]);
+    except
+      on E: Exception do
+        LLHookRunningError('pre', Proc, E);
+    end;
   end;
 end;
 
@@ -767,25 +764,31 @@ procedure DoPostHook(var Registers: TAhRegisters; Index: Integer; Caller: Pointe
     csGlobal:   LeaveCriticalSection(GlobalCritSection);
     csPerProc:  LeaveCriticalSection(ProcHooks[Index].CritSection);
     end;
+
+    InterlockedDecrement(ProcHooks[Index].ActiveCount);
   end;
 
 var
   Count: Integer;
 begin
-  Registers.rEIP := DWord(Caller);
+  if not CheckProcHookIndex('PostHook', Index) then
+    Exit;
 
   with ProcHooks[Index] do
   begin
-    if not CheckProcHookIndex('PostHook', Index) or
-       ( (Mode = hmPrologue) and (PrologueLength > 0) and SkipHookedCaller(Registers.rEIP) ) then
+    Registers.rEIP := DWord(Caller);
+
+    if (Mode = hmPrologue) and (PrologueLength > 0) and SkipHookedCaller(Registers.rEIP) then
       Exit;
 
     if (Mode = hmPrologue) and (PrologueLength = 0) then
       PatchCopying(OrigAddr, @NewPrologue[0], SizeOf(TPrologue));
 
     if SkipHookedCaller(Registers.rEIP) or
-       ( (ProcHooks[Index].Context = NIL) and LLErr('PostHook(%d) called with NIL Context.', [Index]) ) then
+       (InterlockedExchangeAdd(Unhooking, 0) <> 0) or
+       ( (Context = NIL) and LLErr('PostHook(%d) called with NIL Context.', [Index]) ) then
     begin
+      LLDbg('PREMATURE LEAVE POST (index %d = %s).', [Index, Proc]);
       PrepareLeave;
       Exit;
     end;
@@ -795,13 +798,13 @@ begin
     Context.IsAfterCall := True;
     Context.Registers := Registers;
 
-      try
-        Count := Script.RunActionsOf(Proc, Context.Bindings, [raPost]);
-        LLDbg('ran %d post-actions.', [Count]);
-      except
-        on E: Exception do
-          LLHookRunningError('post', Proc, E);
-      end;
+    try
+      Count := Script.RunActionsOf(Proc, Context.Bindings, [raPost]);
+      LLDbg('ran %d post-actions.', [Count]);
+    except
+      on E: Exception do
+        LLHookRunningError('post', Proc, E);
+    end;
 
     FreeAndNIL(Context);
     PrepareLeave;
@@ -820,19 +823,21 @@ begin
 
   with Hook do
   begin
-    if not VirtualProtect(OrigAddr, SizeOf(TPrologue), PAGE_READWRITE, @OldPageMode)
+    if not VirtualProtect(OrigAddr, SizeOf(TPrologue), PAGE_EXECUTE_READWRITE, @OldPageMode)
        and LLErr(VpError, [Proc, DWord(OrigAddr), SizeOf(TPrologue)]) then
       Exit;
 
-    if (PrologueLength = 0) or
-       ( (PrologueLength < SizeOf(TPrologue)) and LLErr(ShortPrologueError, [Proc, PrologueLength, SizeOf(TPrologue)]) ) then
-      PatchCopying(@OrigPrologue[0], OrigAddr, SizeOf(TPrologue))
-      else
-        FillVarPrologueOf(Hook);
+    if (PrologueLength > 0) and (PrologueLength < SizeOf(TPrologue)) and
+       LLErr(ShortPrologueError, [Proc, PrologueLength, SizeOf(TPrologue)]) then
+      PrologueLength := 0;
 
+    if PrologueLength > 0 then
+      FillVarPrologueOf(Hook);
+
+    PatchCopying(@OrigPrologue[0], OrigAddr, SizeOf(TPrologue));
     PatchCopying(OrigAddr, @NewPrologue[0], SizeOf(TPrologue));
 
-    { We don't undo VirtualProtect because OrigAddr will be constantly rewritten by Pre/PostHook. }
+    { We don't undo VirtualProtect because OrigAddr might be constantly rewritten by Pre/PostHook. }
 
     LLDbg('Assigned proc hook ID %d; patched prologue at %.8X (OrigAddr), points to jumper at %.8X.',
           [ProcHookCount, DWord(OrigAddr), DWord(@Jumper[0])]);
@@ -909,14 +914,14 @@ begin
   begin
     Index := ProcHookCount;
     Proc := ProcName;
-
     Mode := Script[ Script.IndexOfProc(ProcName) ].HookMode;
     PrologueLength := Procs[ProcName].PrologueLength;
-
     OrigAddr := Addr;
-
     FillNewPrologueOf( ProcHooks[ProcHookCount] );
     FillJumperOf( ProcHooks[ProcHookCount] );
+
+    if LLUseCritSect = csPerProc then
+      InitializeCriticalSection(CritSection);
 
     if Mode = hmPrologue then
       Result := HookPrologueProc( ProcHooks[ProcHookCount] )
@@ -948,45 +953,62 @@ function UnhookPrologueProc(var Hook: TProcHook): Boolean;
     end;
   end;
 
+const
+  Delay = 50;   // msec.
+var
+  Count, Tries: Integer;
 begin
   LLDbg('Unhooking %s at %.8X (OrigAddr)...', [Hook.Proc, DWord(Hook.OrigAddr)]);
   Result := True;
 
-  case LLUseCritSect of
-  csNone:
-    Result := RestorePrologue and Result;
+  InterlockedIncrement(Hook.Unhooking);
+  Result := RestorePrologue and Result;
 
+  case LLUseCritSect of
   csGlobal:
     begin
       EnterCriticalSection(GlobalCritSection);
-      Result := RestorePrologue and Result;
       LeaveCriticalSection(GlobalCritSection);
     end;
-
   csPerProc:
     begin
       EnterCriticalSection(Hook.CritSection);
-      // restoring again in case PostHook has just written NewPrologue after executing:
-      Result := RestorePrologue and Result;
-
       LeaveCriticalSection(Hook.CritSection);
-      DeleteCriticalSection(Hook.CritSection);
     end;
   end;
 
-  if Hook.Context <> NIL then
+  for Tries := 5000 div Delay downto 0 do
   begin
-    LLErr('Context of %s hook wasn''t NIL when unhooking, IsAfterCall = %s.',
-          [Hook.Proc, BoolToStr(Hook.Context.IsAfterCall, True)]);
-    Result := False;
-    // letting it hang in there leaking memory but at least avoiding Access Violations
-    // and NIL refs when we deallocate the context in the middle of its actions running.
-//    Hook.Context.Free;
+    Count := InterlockedExchangeAdd(Hook.ActiveCount, 0);
+    LLDbg('waiting for %d active pre/post handler(s) to return...', [Count]);
+    if Count <= 0 then
+      Break;
+    Sleep(Delay);
   end;
 
-  if not VirtualProtect(Hook.OrigAddr, SizeOf(TPrologue), Hook.OldPageMode, @Hook.OldPageMode)
-     and LLErr('Cannot undo VirtualProtect''ion of %s at address %.8X.', [Hook.Proc, DWord(Hook.OrigAddr)]) then
+  if (Count > 0) and LLErr('Active hook handlers of %s take too long to return - forcefully closing the context.', [Hook.Proc]) then
     Result := False;
+
+  if (LLUseCritSect = csPerProc) and Result then
+    // See the note below below on why we don't delete the section on Result = False.
+    DeleteCriticalSection(Hook.CritSection);
+
+  if Hook.Context <> NIL then
+    { Might be expected (if Result = True) - if there was a PreHook handler running before
+      we've set Unhooking to non-zero; once that handler returns and proceeds to PostHook
+      it will see Unhooking and abandon its context.
+      But if Result = False we leave the context hang leaking memory but at least avoiding
+      Access Violations and NIL refs when we deallocate the context in the middle of its
+      actions running (waiting for which was adandoned since Result is False). }
+    if Result then
+      FreeAndNIL(Hook.Context)
+      else
+        LLErr('Context of %s hook wasn''t NIL when unhooking, IsAfterCall = %s.',
+              [Hook.Proc, BoolToStr(Hook.Context.IsAfterCall, True)]);
+
+  { Undoing VirtualProtect in ResetLowLevel in bulk because this function changes
+    access mode of the entire page region and we might have more hooked functions
+    belonging to the same page that are yet to be unhooked. }
 end;
 
 function UnhookImportProc(var Hook: TProcHook): Boolean;
@@ -1079,10 +1101,7 @@ begin
   InitVars(HookImageName);
   LLDbg('Library is loaded at %.8X..%.8X.', [SelfImageBase, SelfImageEnd]);
 
-  SetProcHookCount(InitialProcHookCount);
-
-  if Length(ProcHooks) < Script.ProcCount then
-    SetProcHookCount(Script.ProcCount);
+  SetProcHookCount(Max(InitialProcHookCount, Script.ProcCount));
 
   for I := 0 to Script.ProcCount - 1 do
     if not HookProc(Script.ProcNames[I]) then
@@ -1097,7 +1116,13 @@ begin
 
   for I := 0 to ProcHookCount - 1 do
     if not UnhookProc(ProcHooks[I]) then
-      LLErr('Error unhooking procedute %s.', [Script.ProcNames[I]]);
+      LLErr('Possible error unhooking procedute %s.', [Script.ProcNames[I]]);
+
+  // See the note in UnhookProc on why we're undoing VirtualProtect here.
+  for I := 0 to ProcHookCount - 1 do
+    with ProcHooks[I] do
+      if not VirtualProtect(OrigAddr, SizeOf(TPrologue), OldPageMode, @OldPageMode) then
+        LLErr('Cannot undo VirtualProtect''ion of %s at address %.8X.', [Proc, DWord(OrigAddr)]);
 
   SetProcHookCount(0);
 end;
