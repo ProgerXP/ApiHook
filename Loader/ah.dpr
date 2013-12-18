@@ -35,6 +35,7 @@ type
   TApiHookApp = class (TCLColorApplication)
   protected
     FInitialCWD: WideString;
+    FSelfPath: WideString;
     FLogLevel: TAhLogLevel;
     FLogTimeFmt, FPreviousLog: WideString;
     FOutputCritSection: TRTLCriticalSection;
@@ -110,6 +111,7 @@ type
     procedure WatchLogLoop(LogFile: WideString; Interval: Integer);
 
     function ExpandPath(Path, BasePath: WideString): WideString;
+    function ComponentPath(const Local: WideString): WideString;
 
     procedure Error(Msg: WideString; Fmt: array of const);
     procedure Log(Level: TAhLogLevel; Msg: WideString; Fmt: array of const);
@@ -154,7 +156,7 @@ end;
 
 function LoaderData(const DLL: WideString; JustLoad: Boolean; const Settings: TAhSettings): TLoaderData; overload;
 begin
-  ZeroMemory(@Result, SizeOf(Result));
+  FillChar(Result, SizeOf(Result), 0);
 
   @Result.LoadLibraryW := GetProcAddress(GetModuleHandle(kernel32), 'LoadLibraryW');
   @Result.GetProcAddress := GetProcAddress(GetModuleHandle(kernel32), 'GetProcAddress');
@@ -247,7 +249,7 @@ begin
 
   FPipeName := '';
   FPipe := NIL;
-  ZeroMemory(@FPipeData, SizeOf(FPipeData));
+  FillChar(FPipeData, SizeOf(FPipeData), 0);
 
   InitializeCriticalSection(FOutputCritSection);
 end;
@@ -282,10 +284,11 @@ begin
   FLogTimeFmt := FCLParser.GetOrDefault('log-time', FLang['log time']);
   FLogLevel := GetLogLevelOpt('verbose');
   FInitialCWD := CurrentDirectory;
+  FSelfPath := IncludeTrailingPathDelimiter( ExtractFilePath(ParamStrW(0)) );
 
   if FCLParser.IsPassed('chdir') then
   begin
-    NewCWD := ExpandPath(FCLParser['chdir'], ExtractFilePath( ParamStrW(0) ));
+    NewCWD := ExpandPath(FCLParser['chdir'], FSelfPath);
 
     if NewCWD <> CurrentDirectory then
       if ChDir(NewCWD) then
@@ -306,13 +309,21 @@ begin
   Result := ExpandFileName(Path, FInitialCWD);
 end;
 
+function TApiHookApp.ComponentPath(const Local: WideString): WideString;
+begin
+  if FileExists(Local) then
+    Result := Local
+    else
+      Result := FSelfPath + Local;
+end;
+
 procedure TApiHookApp.SetInfo;
 begin
   Name := 'ApiHook';
   Version := AhVersion;
   Author := 'Proger_XP';
   WWW := AhHomePage;
-  BuildDate := $20131216;
+  BuildDate := $16122013;
 
   Help := FLang['help'];
   HelpDetails := FLang['help details'];
@@ -476,47 +487,47 @@ end;
             Result := -1;
     end;
 
+    function TryScript(const Name: WideString): Boolean;
+    begin
+      Result := FileExists(Name);
+      if Result then
+        FArgs.Script := Name;
+    end;
+
   var
     I: Integer;
   begin
-    with FArgs do
-    begin
-      if (Task = 'inject') or (Task = 'extend') then
-        DLL := TaskArg(Task, 1)
-        else if FCLParser.IsPassed('lib') then
-          DLL := FCLParser['lib']
-          else
-          begin
-            DLL := 'ApiHook.dll';
-            if not FileExists(DLL) then
-              DLL := ExtractFilePath(ParamStrW(0)) + '\' + DLL;
-            Log(logDebug, 'ack: --lib', [DLL]);
-          end;
-
-      DLL := ExpandFileName(DLL);
-
-      I := GetScriptArgIndex;
-      if I = -1 then
-        Script := ''
+    if (Task = 'inject') or (Task = 'extend') then
+      FArgs.DLL := TaskArg(Task, 1)
+      else if FCLParser.IsPassed('lib') then
+        FArgs.DLL := FCLParser['lib']
         else
         begin
-          Script := '';
-
-          if FCLParser.ArgCount - 1 <= I {task is arg #0} then
-            if FileExists('Script.oo') then
-              Script := 'Script.oo'
-              else if FileExists('Script.txt') then
-                Script := 'Script.txt';
-
-          if Script = '' then
-            Script := TaskArg(Task, I);
-
-          if (ExtractFileExt(Script) = '') and not FileExists(Script) then
-            if FileExists(Script + '.oo') then
-              Script := Script + '.oo'
-              else if FileExists(Script + '.txt') then
-                Script := Script + '.txt';
+          FArgs.DLL := ComponentPath('ApiHook.dll');
+          Log(logDebug, 'ack: --lib', [FArgs.DLL]);
         end;
+
+    FArgs.DLL := ExpandFileName(FArgs.DLL);
+    FArgs.Script := '';
+    I := GetScriptArgIndex;
+
+    if I >= 0 then
+    begin
+      if FCLParser.ArgCount - 1 <= I {task is arg #0} then
+      begin
+        TryScript( ChangeFileExt(TaskArg(Task), '.oo') );
+        TryScript('Script.oo');
+        TryScript('Script.txt');
+      end;
+
+      if FArgs.Script = '' then
+        FArgs.Script := TaskArg(Task, I);
+
+      if (ExtractFileExt(FArgs.Script) = '') and not FileExists(FArgs.Script) then
+        if FileExists(FArgs.Script + '.oo') then
+          FArgs.Script := FArgs.Script + '.oo'
+          else if FileExists(FArgs.Script + '.txt') then
+            FArgs.Script := FArgs.Script + '.txt';
     end;
   end;
 
@@ -694,8 +705,8 @@ begin
   if not FCLParser.IsSwitchOn('suspend', True) then
     Flags := Flags and not CREATE_SUSPENDED;
 
-  ZeroMemory(@StartupInfo, SizeOf(StartupInfo));
-  if not CreateProcessW(PWideChar(EXE), PWideChar(CL), NIL, NIL, False, Flags, NIL,
+  FillChar(StartupInfo, SizeOf(StartupInfo), 0);
+  if not CreateProcessW(NIL, PWideChar('"' + EXE + '" ' + CL), NIL, NIL, False, Flags, NIL,
                         PWideChar(CWD), StartupInfo, ProcInfo) then
     FLang.RaiseText('error: launch: CreateProcess', [EXE, CWD, SysErrorMsg]);
 
@@ -734,10 +745,10 @@ end;
     with FCLParser do
     begin
       if IsSwitchOn('thread-safe', True) then
-        if Options['thread-safe'] = 'p' then
-          ThreadSafe := csPerProc
+        if Options['thread-safe'] = '1' then
+          ThreadSafe := csGlobal
           else
-            ThreadSafe := csGlobal
+            ThreadSafe := csPerProc
         else
           ThreadSafe := csNone;
 
@@ -883,7 +894,7 @@ procedure TApiHookApp.EnterPipeLoop;
 var
   ResumeNoProc: TAhProcInfo;
 begin
-  ZeroMemory(@ResumeNoProc, SizeOf(ResumeNoProc));
+  FillChar(ResumeNoProc, SizeOf(ResumeNoProc), 0);
   EnterPipeLoop(ResumeNoProc);
 end;
 
@@ -1020,7 +1031,7 @@ procedure TApiHookApp.InitLibraryViaPipe;
   var
     FN: WideString;
   begin
-    FN := FCLParser.GetOrDefault(Option, DefaultFN);
+    FN := FCLParser.GetOrDefault(Option, ComponentPath(DefaultFN));
     if FN <> DefaultFN then
       Log(logInfo, 'ack: --catalog', [FN]);
 
