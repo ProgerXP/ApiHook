@@ -100,11 +100,11 @@ Conditionals=AhDebug1
 DebugSourceDirs=
 UsePackages=0
 [Parameters]
-RunParams=s script
-HostApplication=C:\Program Files\Borland\Delphi7\Projects\!VN hack\ApiHook\Out\ah.exe
+RunParams=s "slp log foo"
+HostApplication=E:\Delphi\ApiHook\Out\ah.exe
 Launcher=
 UseLauncher=0
-DebugCWD=
+DebugCWD=..\Ignore\ws2test
 [Version Info]
 IncludeVerInfo=1
 AutoIncBuild=0

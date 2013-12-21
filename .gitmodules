@@ -1,0 +1,3 @@
+[submodule "Lib/D7X"]
+	path = Lib/D7X
+	url = https://github.com/ProgerXP/D7X.git
