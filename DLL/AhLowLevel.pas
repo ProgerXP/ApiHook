@@ -28,6 +28,7 @@ type
     // destroying this hook data.
     Unhooking: Integer;
     CritSection: TRTLCriticalSection;
+    AnyCaller: Boolean;
     Context: TAhHookedContext;    // NIL when hook isn't executing.
 
     OrigAddr: Pointer;
@@ -314,15 +315,17 @@ begin
   end;
 end;
 
-function SkipHookedCaller(Addr: DWord): Boolean;
+function SkipHookedCaller(AnyCaller: Boolean; Addr: DWord): Boolean;
 begin
   {$IFDEF AhDebug}
     Result := False;
   {$ELSE}
-    if HookImageEnd = 0 then
-      Result := (Addr >= SelfImageBase) and (Addr <= SelfImageEnd)
-      else
-        Result := (Addr < HookImageBase) or (Addr > HookImageEnd);
+    if AnyCaller then
+      Result := False
+      else if HookImageEnd = 0 then
+        Result := (Addr >= SelfImageBase) and (Addr <= SelfImageEnd)
+        else
+          Result := (Addr < HookImageBase) or (Addr > HookImageEnd);
   {$ENDIF}
 end;
 
@@ -721,9 +724,8 @@ begin
 
   with ProcHooks[Index] do
   begin
-    // optimization to avoid entering critical section on local calls - without it and
-    // with loader <-> library pipe attached this will fail with AV rather quickly.
-    if (Mode = hmPrologue) and (PrologueLength > 0) and SkipHookedCaller(Registers.rEIP) then
+    // optimization to avoid entering critical section on local calls.
+    if (Mode = hmPrologue) and (PrologueLength > 0) and SkipHookedCaller(AnyCaller, Registers.rEIP) then
       Exit;
 
     InterlockedIncrement(ActiveCount);
@@ -738,7 +740,7 @@ begin
     if (Mode = hmPrologue) and (PrologueLength = 0) then
       PatchCopying(OrigAddr, @OrigPrologue[0], SizeOf(TPrologue));
 
-    if SkipHookedCaller(Registers.rEIP) or (InterlockedExchangeAdd(Unhooking, 0) <> 0) then
+    if SkipHookedCaller(AnyCaller, Registers.rEIP) or (InterlockedExchangeAdd(Unhooking, 0) <> 0) then
     begin
       LLDbg('PREMATURE LEAVE PRE (index %d = %s).', [Index, Proc]);
       Exit;
@@ -778,13 +780,13 @@ begin
   begin
     Registers.rEIP := DWord(Caller);
 
-    if (Mode = hmPrologue) and (PrologueLength > 0) and SkipHookedCaller(Registers.rEIP) then
+    if (Mode = hmPrologue) and (PrologueLength > 0) and SkipHookedCaller(AnyCaller, Registers.rEIP) then
       Exit;
 
     if (Mode = hmPrologue) and (PrologueLength = 0) then
       PatchCopying(OrigAddr, @NewPrologue[0], SizeOf(TPrologue));
 
-    if SkipHookedCaller(Registers.rEIP) or
+    if SkipHookedCaller(AnyCaller, Registers.rEIP) or
        (InterlockedExchangeAdd(Unhooking, 0) <> 0) or
        ( (Context = NIL) and LLErr('PostHook(%d) called with NIL Context.', [Index]) ) then
     begin
@@ -916,6 +918,7 @@ begin
     Proc := ProcName;
     Mode := Script[ Script.IndexOfProc(ProcName) ].HookMode;
     PrologueLength := Procs[ProcName].PrologueLength;
+    AnyCaller := Procs[ProcName].AnyCaller;
     OrigAddr := Addr;
     FillNewPrologueOf( ProcHooks[ProcHookCount] );
     FillJumperOf( ProcHooks[ProcHookCount] );

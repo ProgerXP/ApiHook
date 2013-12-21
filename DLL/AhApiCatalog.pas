@@ -49,6 +49,7 @@ type
     PrologueLength: Integer;
     Return: TApiParamKind;
     ReturnHint: WideString;
+    AnyCaller: Boolean;
   end;
 
   TAhCallConv = class (TPersistent)
@@ -266,6 +267,7 @@ end;
       Result.PrologueLength := 0;
 
     Result.Return := TApiParams.StrToKindHinting( List.Values['Return'], Result.ReturnHint );
+    Result.AnyCaller := TrimLeft(List.Values['AnyCaller'], '0 ') <> '';
   end;
 
   function TAhApiCatalog.LoadParamsFrom(List: TStringsW; const Name: String = '???'): TApiParams;

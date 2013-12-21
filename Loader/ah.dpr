@@ -243,6 +243,9 @@ end;
 
 procedure TApiHookApp.Init;
 begin
+  FInitialCWD := CurrentDirectory;
+  FSelfPath := IncludeTrailingPathDelimiter( ExtractFilePath(ParamStrW(0)) );
+
   inherited;
 
   FPreviousLog := '';
@@ -250,7 +253,7 @@ begin
   FPipeName := '';
   FPipe := NIL;
   FillChar(FPipeData, SizeOf(FPipeData), 0);
-
+                                                   
   InitializeCriticalSection(FOutputCritSection);
 end;
 
@@ -269,8 +272,8 @@ function TApiHookApp.CreateLang: TCLAppLang;
 begin
   Result := inherited CreateLang;
 
-  if FileExists('en.ini') then
-    Result.LoadFromIniFile('en.ini')
+  if FileExists(FSelfPath + 'en.ini') then
+    Result.LoadFromIniFile(FSelfPath + 'en.ini')
     else
       Result.LoadFromResource('LANG');
 end;
@@ -283,8 +286,6 @@ begin
 
   FLogTimeFmt := FCLParser.GetOrDefault('log-time', FLang['log time']);
   FLogLevel := GetLogLevelOpt('verbose');
-  FInitialCWD := CurrentDirectory;
-  FSelfPath := IncludeTrailingPathDelimiter( ExtractFilePath(ParamStrW(0)) );
 
   if FCLParser.IsPassed('chdir') then
   begin
@@ -1003,7 +1004,7 @@ procedure TApiHookApp.InitLibraryViaPipe;
 
     Consts := FCLParser['consts'];
     if Consts = FCLParser.NotPassed then
-      Consts := 'Constants.ini'
+      Consts := ComponentPath('Constants.ini')
       else
         Log(logInfo, 'ack: --consts', [Consts]);
     if FileExists(Consts) then
@@ -1032,13 +1033,18 @@ procedure TApiHookApp.InitLibraryViaPipe;
     FN: WideString;
   begin
     FN := FCLParser.GetOrDefault(Option, ComponentPath(DefaultFN));
-    if FN <> DefaultFN then
-      Log(logInfo, 'ack: --catalog', [FN]);
 
     if FileExists(FN) then
+    begin
+      if FN <> DefaultFN then
+        Log(logInfo, 'ack: --catalog', [FN]);
       Result := TFileStreamW.LoadUnicodeFrom(FN)
+    end
       else
+      begin
+        Log(logError, 'error: no --catalog', [FN]);
         Result := '';
+      end;
   end;
 
 begin
