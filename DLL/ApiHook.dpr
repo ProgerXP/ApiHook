@@ -445,7 +445,7 @@ end;
 
 procedure TAhHookLib.Unhook;
 begin
-  ResetLowLevel;    
+  ResetLowLevel;
 end;
 
 procedure TAhHookLib.DetachPipe;
@@ -651,7 +651,5 @@ exports
 
 begin
   DLLProc := DllEvent;
-  IsMultiThread := True;
   DLLProc(DLL_PROCESS_ATTACH);
 end.
-
