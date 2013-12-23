@@ -29,6 +29,14 @@ type
   TAhOnLog = procedure (Level: TAhLogLevel; Str: WideString; Fmt: array of const) of object;
   TAhSetSettings = function (const ASettings: TAhSettings): Boolean; stdcall;
 
+  { Can be written to (will write to the actual memory) but size can't be changed. }
+  TAhInMemoryStream = class (TMemoryStream)
+  protected
+    function Realloc(var NewCapacity: Integer): Pointer; override;
+  public
+    constructor Create(Start: Pointer; Size: Integer);
+  end;
+
   TAhPipe = class
   protected
     FHandle: THandle;
@@ -330,6 +338,21 @@ begin
   NewMsg := NewMsg + Msg;
   Delete(NewFmt, 1, 1);
 end;
+                        
+{ TAhInMemoryStream }
+
+constructor TAhInMemoryStream.Create(Start: Pointer; Size: Integer);
+begin
+  SetPointer(Start, Size);
+end;
+
+function TAhInMemoryStream.Realloc(var NewCapacity: Integer): Pointer;
+begin
+  if NewCapacity = 0 then
+    Result := nil
+  else
+    raise EWriteError.CreateFmt('%s cannot be resized.', [ClassName]);
+end;
 
 { TAhPipe }
 
@@ -516,16 +539,13 @@ end;
 
 destructor TAhLogger.Destroy;
 begin
-  if FLog <> NIL then
-    FLog.Free;
+  FLog.Free;
   inherited;
 end;
 
 procedure TAhLogger.Reopen(LogFN: WideString);
 begin
-  if FLog <> NIL then
-    FLog.Free;
-
+  FLog.Free;
   FFileName := LogFN;
 end;
 

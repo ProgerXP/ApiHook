@@ -1,5 +1,7 @@
 unit AhScript;
 
+//{$DEFINE WithLightpath}
+
 interface
 
 uses Contnrs, Classes, Windows, SysUtils, Math, CallbackHash, IniFilesW, StringsW,
@@ -12,7 +14,8 @@ type
 
   TAhRunPhase = (raPre, raPost);
   TAhRunPhases = set of TAhRunPhase;
-  THookMode = (hmPrologue, hmImport);
+  THookMode = (hmPrologue, hmImport);   
+  TAhEndType = (FixedEnd, LengthEnd);
 
   TAhGetRegister = function (Reg: String; out Value: DWord): Boolean of object;
   TAhGetArg = function (Arg: String): TRpnScalar of object;
@@ -130,6 +133,7 @@ type
     class function ClassOf(const Action: WideString): TAhActionClass;
 
     class function Name: WideString;
+    class function DefaultFileName(const Ext: WideString): WideString;
 
     constructor Create(const Args: WideString; Owner: TAhScript = NIL);
     destructor Destroy; override;
@@ -140,9 +144,23 @@ type
     function PerformIn(Context: TAhContext): Boolean; virtual;
   end;
 
+  TAhRangeAction = class (TAhAction)
+  protected
+    FEndType: TAhEndType;
+
+    function Parse(Args: WideString): TWideStringArray; override;
+    procedure Perform; override;
+    procedure CheckArgs; virtual;
+    procedure PerformOnRange(Start, Size: Integer); virtual; abstract;
+  end;
+
 function AhEvalRPN(Context: TAhContext; Expr: WideString; Settings: TRpnCompSettings): TRpnScalar;
 
 implementation
+
+{$IFDEF WithLightpath}
+uses AhLight;
+{$ENDIF}
 
 type
   TAhRpnVarList = class (TRpnVariables)
@@ -172,13 +190,14 @@ type
     procedure MultipleArgSave;
   end;
 
-  TDumpAction = class (TAhAction)
+  TDumpAction = class (TAhRangeAction)
   protected
     FFile: WideString;
     FIsPeriod: Boolean;
 
     function Parse(Args: WideString): TWideStringArray; override;
-    procedure Perform; override;
+    procedure CheckArgs; override;
+    procedure PerformOnRange(Start, Size: Integer); override;
   end;
 
   TIfAction = class (TAhAction)
@@ -1003,6 +1022,11 @@ begin
   Result := Copy(ClassName, 2, Length(ClassName) - 7);    // T...Action
 end;
 
+class function TAhAction.DefaultFileName(const Ext: WideString): WideString;
+begin
+  Result := ChangeFileExt(ParamStrW(0), Ext);
+end;
+
 class function TAhAction.From(Cmd: WideString; Owner: TAhScript): TAhAction;
 const
   PostPf = '.';
@@ -1122,6 +1146,42 @@ procedure TAhAction.Log(Level: TAhLogLevel; Str: WideString; Fmt: array of const
 begin
   FContext.Log(Level, '{wi ' + FContext.ProcName + ':} ' + Str, Fmt);
 end;
+                
+{ TAhRangeAction }
+
+function TAhRangeAction.Parse(Args: WideString): TWideStringArray;
+const
+  Types: array[Boolean] of TAhEndType = (FixedEnd, LengthEnd);
+  Separators: array[TAhEndType] of WideString = ('--', '..');
+begin
+  inherited Parse(Args);
+
+  FEndType := Types[PosW('..', Args) > 0];
+  Result := Explode(Separators[FEndType], Args, 2);
+end;
+
+procedure TAhRangeAction.Perform;
+var
+  AFrom, ATo: DWord;
+begin
+  CheckArgs;
+
+  AFrom := RpnValueToInt( Eval(FArgs[0]) );
+  ATo   := RpnValueToInt( Eval(FArgs[1]) );
+
+  if FEndType = FixedEnd then
+    if ATo < AFrom then
+      Error('end address %.8X is less than start address %.8X', [ATo, AFrom])
+      else
+        Dec(ATo, AFrom);
+
+  PerformOnRange(AFrom, ATo);
+end;
+
+procedure TAhRangeAction.CheckArgs;
+begin
+  NeedArgs(2, 'startAddr..size OR startAddr--endAddr');
+end;
 
 { TLogAction }
 
@@ -1184,47 +1244,29 @@ end;
 { TDumpAction }
 
 function TDumpAction.Parse(Args: WideString): TWideStringArray;
-var
-  AFile: WideString;
 begin
-  inherited Parse(Args);
-
-  if Split(Args, ' ', AFile, Args) then
-  begin
-    FFile := AFile;
-    FIsPeriod := PosW('..', Args) > 0;
-
-    if FIsPeriod then
-      Result := Explode('..', Args, 2)
-      else
-        Result := Explode('--', Args, 2);
-  end;
+  FArgStr := Args;
+  Split(Args, ' ', FFile, Args);
+  Result := inherited Parse(Args);
 end;
 
-procedure TDumpAction.Perform;
-var
-  Name: WideString;
-  AFrom, ATo: DWord;
-  Buf: Pointer;
+procedure TDumpAction.CheckArgs;
 begin
   NeedArgs(2, 'file startAddr..size OR file startAddr--endAddr; file can contain ''*''s for a random string');
+end;
 
+procedure TDumpAction.PerformOnRange(Start, Size: Integer);
+var
+  Name: WideString;
+  Buf: Pointer;
+begin
   Name  := ExpandStr(FFile);
-  AFrom := RpnValueToInt( Eval(FArgs[0]) );
-  ATo   := RpnValueToInt( Eval(FArgs[1]) );
-
-  if not FIsPeriod then
-    if ATo < AFrom then
-      Error('end address %.8X is less than start address %.8X', [ATo, AFrom])
-      else
-        Dec(ATo, AFrom);
-
-  GetMem(Buf, ATo);
+  GetMem(Buf, Size);
   try
-    Move(Pointer(AFrom)^, Buf^, ATo);
-    FContext.SaveFile(Name, Buf^, ATo);
+    Move(Pointer(Start)^, Buf^, Size);
+    FContext.SaveFile(Name, Buf^, Size);
   finally
-    FreeMem(Buf, ATo);
+    FreeMem(Buf, Size);
   end;
 end;
 
