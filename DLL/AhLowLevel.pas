@@ -24,6 +24,8 @@ type
     // Number of threads (callers) that are currently inside a Pre/Post handler or
     // are waiting to acquire the critical section object.
     ActiveCount: Integer;
+    // Zero if hook isn't running yet or first Caller passed to PreHook otherwise.
+    FirstCaller: DWord;
     // Is True when ActiveCount > 0 and UnhookProc waits for handlers to finish before
     // destroying this hook data.
     Unhooking: Integer;
@@ -104,6 +106,8 @@ const
   NewPrologueTpl: TPrologue = ({PUSH} $68, {addr} 0, 0, 0, 0, {RET} $C3);
   NewPrologueTplAddr = 1;
 
+  // [ESP-this] - if changing also change JumperTpl.
+  SmallJumperOffset = $2000;
   JumperTpl: TJumper = (
                   {---------------- Prehook ----------------}
 
@@ -163,7 +167,7 @@ const
 
                   {--------------- Posthook ---------------}
 
-  {  Executing contniues at this point after origRoutine -> stackLanging calls.       }
+  {  Executing continues at this point after origRoutine -> stackLanging calls.       }
 
     {PUSH   index}              $68,        0, 0, 0, 0,
     {CALL   posthook}           $FF, $15,   0, 0, 0, 0,   {PostHookAddr}
@@ -540,7 +544,7 @@ begin
     Dec(I);
   end;
 
-  LLOnScriptLog(logInfo, 'Saving user file of %d bytes to %s...', [Size, Name]);
+  LLOnScriptLog(logInfo, 'Dumping %d bytes to %s...', [Size, Name]);
 
   Stream := TFileStreamW.CreateCustom(Name, fmForcePath or fmShareDenyNone);
   try
@@ -706,7 +710,7 @@ asm
   LEA   EAX, [ESP + $10]
   PUSH  EAX
   CALL  DoPostHook
-
+  
   POP   ECX
   POP   EAX
 
@@ -716,9 +720,18 @@ asm
 end;
 
 procedure DoPreHook(const Registers: TAhRegisters; Index: Integer); stdcall;
+const
+  SafeRange = $FF;
 var
+  SmallJumperPos: DWord;
   Count: Integer;
 begin
+  SmallJumperPos := Registers.rESP - SmallJumperOffset - SafeRange;
+  if not VirtualProtect(Pointer(SmallJumperPos), SafeRange * 2, PAGE_EXECUTE_READWRITE, @Count) then
+    // Not critical but might lead to access violation, e.g. on PAGE_GUARD seen in some DLLs.
+    LLErr('Cannot undo VirtualProtect''ion the stack around %.8X for the small jumper: (%d) %s.',
+          [SmallJumperPos, GetLastError, SysErrorMessage(GetLastError)]);
+
   if not CheckProcHookIndex('PreHook', Index) then
     Exit;
 
@@ -740,13 +753,19 @@ begin
     if (Mode = hmPrologue) and (PrologueLength = 0) then
       PatchCopying(OrigAddr, @OrigPrologue[0], SizeOf(TPrologue));
 
-    if SkipHookedCaller(AnyCaller, Registers.rEIP) or (InterlockedExchangeAdd(Unhooking, 0) <> 0) then
+    // FirstCaller may be set even when using critical sections - they don't protect
+    // against calls within the same thread (e.g. when hooking all callers of CreateFile
+    // these calls might originate from within the hook handlers themselves and will loop).
+    if (FirstCaller <> 0) or
+       SkipHookedCaller(AnyCaller, Registers.rEIP) or
+       (InterlockedExchangeAdd(Unhooking, 0) <> 0) then
     begin
       LLDbg('PREMATURE LEAVE PRE (index %d = %s).', [Index, Proc]);
       Exit;
     end;
 
     LLDbg('PRE HOOK (index %d = %s).', [Index, Proc]);
+    FirstCaller := Registers.rEIP;
     Context := TAhHookedContext.Create(Index, Registers);
 
     try
@@ -788,6 +807,8 @@ begin
 
     if SkipHookedCaller(AnyCaller, Registers.rEIP) or
        (InterlockedExchangeAdd(Unhooking, 0) <> 0) or
+       (FirstCaller <> Registers.rEIP) or
+       ( (FirstCaller = 0) and LLErr('PostHook(%d) called with empty FirstCaller.', [Index]) ) or
        ( (Context = NIL) and LLErr('PostHook(%d) called with NIL Context.', [Index]) ) then
     begin
       LLDbg('PREMATURE LEAVE POST (index %d = %s).', [Index, Proc]);
@@ -809,6 +830,7 @@ begin
     end;
 
     FreeAndNIL(Context);
+    FirstCaller := 0;
     PrepareLeave;
 
     LLDbg('LEFT HOOK (index %d = %s)', [Index, Proc]);
@@ -1081,8 +1103,7 @@ begin
 
   if ACatalog <> NIL then
   begin
-    if Procs <> NIL then
-      Procs.Free;
+    Procs.Free;
     Procs := ACatalog;
     ACatalog := NIL;
   end
@@ -1091,8 +1112,7 @@ begin
 
   if AScript <> NIL then
   begin
-    if Script <> NIL then
-      Script.Free;
+    Script.Free;
     Script := AScript;
     AScript := NIL;
   end
@@ -1149,9 +1169,6 @@ initialization
 finalization
   DeleteCriticalSection(GlobalCritSection);
   GlobalSaved.Free;
-
-  if Procs <> NIL then
-    Procs.Free;
-  if Script <> NIL then
-    Script.Free;
+  Procs.Free;
+  Script.Free;
 end.

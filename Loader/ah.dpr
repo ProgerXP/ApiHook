@@ -4,7 +4,7 @@ program ah;
 
 uses
   FastShareMem, Windows, MMSystem, SysUtils, Classes, FileStreamW, StringsW,
-  Threads, CommandLine, ColorConsole, StringUtils, Utils, AhCommon;
+  Threads, CommandLine, ColorConsole, ProcUtils, StringUtils, Utils, AhCommon;
 
 type
   PLoaderData = ^TLoaderData;
@@ -253,7 +253,7 @@ begin
   FPipeName := '';
   FPipe := NIL;
   FillChar(FPipeData, SizeOf(FPipeData), 0);
-                                                   
+
   InitializeCriticalSection(FOutputCritSection);
 end;
 
@@ -428,9 +428,7 @@ end;
 procedure TApiHookApp.FreePipe;
 begin
   LeavePipeLoop;
-
-  if FPipe <> NIL then
-    FreeAndNIL(FPipe);
+  FreeAndNIL(FPipe);
 end;
 
 function TApiHookApp.TryDoingTask(Task: WideString): Boolean;
@@ -924,8 +922,7 @@ begin
 
     // in case LeavePipeLoop was called twice from different threads and the first caller
     // was delayed by WaitFor above.
-    if FPipeThread <> NIL then
-      FreeAndNIL(FPipeThread);
+    FreeAndNIL(FPipeThread);
   end;
 end;
 
@@ -1173,6 +1170,8 @@ end;
 
 begin
   Randomize;
+  // Just in case.
+  IsMultiThread := True;
 
   App := TApiHookApp.Create;
   try

@@ -23,7 +23,6 @@ type
     FApp: TAhHookLib;
     FExitThread: Boolean;
     FLogQueue: TObjectQueue;    // of TLogQueueItem.
-    FAddLogCritSection: TRTLCriticalSection;
 
     FLogError, FLogData: TStream;
     FLogErrorFN, FLogDataFN: WideString;
@@ -48,6 +47,7 @@ type
     property ExitThread: Boolean read FExitThread write FExitThread;
 
     function ReceiveThread(Caller: TObject; const Arguments: TProcArguments): DWord;
+    // Not thread-safe. Use App.Log.
     procedure QueueLog(Level: TAhLogLevel; const Msg: WideString; Fmt: array of const);
 
     property LogErrorFN: WideString read FLogErrorFN write SetLogErrorFN;
@@ -66,7 +66,8 @@ type
     FSettings: TAhSettings;
     FStartTime: DWord;
     FIsInitialized: Boolean;
-    FLogs: TAhLoggers;
+    FLogs: TAhLoggers;           
+    FLogCritSection: TRTLCriticalSection;
 
     FPipe: TAhLibPipe;
     FPipeThread: TSingleThread;
@@ -84,6 +85,7 @@ type
 
     property Settings: TAhSettings read FSettings;
 
+    { Log is thread-safe and those below delegate to it so they're too. }
     procedure Log(Level: TAhLogLevel; Msg: WideString; Fmt: array of const);
     procedure LowLevelLog(Level: TAhLogLevel; Msg: WideString; Fmt: array of const);
     procedure Debug(const Msg: WideString; Fmt: array of const);
@@ -135,8 +137,6 @@ begin
 
   FLogError := NIL;
   FLogData := NIL;
-
-  InitializeCriticalSection(FAddLogCritSection);
   FLogQueue := TObjectQueue.Create;
 
   inherited ConnectTo(NamedPipe);
@@ -149,14 +149,10 @@ destructor TAhLibPipe.Destroy;
 begin
   while FLogQueue.Count > 0 do
     FLogQueue.Pop.Free;
+
   FLogQUeue.Free;
-
-  DeleteCriticalSection(FAddLogCritSection);
-
-  if FLogData <> NIL then
-    FLogData.Free;
-  if FLogError <> NIL then
-    FLogError.Free;
+  FLogData.Free;
+  FLogError.Free;
 
   inherited;
 end;
@@ -258,9 +254,6 @@ begin
   end
     else
     begin
-      if FApp.Settings.UseCriticalSections <> csNone then
-        EnterCriticalSection(FAddLogCritSection);
-
       MakePortableFormat(Msg, Fmt, NewMsg, NewFmt);
 
       if (Level = logError) and (Msg = MaxError) then
@@ -270,9 +263,6 @@ begin
         TObjectStack(FLogQueue).Push( TLogQueueItem.Create(Level, NewMsg, NewFmt) )
         else
           FLogQueue.Push( TLogQueueItem.Create(Level, NewMsg, NewFmt) );
-
-      if FApp.Settings.UseCriticalSections <> csNone then
-        LeaveCriticalSection(FAddLogCritSection);
     end;
 end;
 
@@ -321,17 +311,13 @@ end;
 procedure TAhLibPipe.SetLogErrorFN(const Value: WideString);
 begin
   FLogErrorFN := Value;
-
-  if FLogError <> NIL then
-    FreeAndNIL(FLogError);
+  FreeAndNIL(FLogError);
 end;
 
 procedure TAhLibPipe.SetLogDataFN(const Value: WideString);
 begin
   FLogDataFN := Value;
-
-  if FLogData <> NIL then
-    FreeAndNIL(FLogData);
+  FreeAndNIL(FLogData);
 end;
 
 procedure TAhLibPipe.PipeIsClosing;
@@ -350,6 +336,7 @@ begin
   FStartTime := timeGetTime;
 
   Move(Settings, FSettings, SIzeOf(Settings));
+  InitializeCriticalSection(FLogCritSection);
   FLogs := TAhLoggers.Create;
 end;
 
@@ -385,11 +372,10 @@ begin
 
   Unhook;
   DetachPipe;
-
-  if FScript <> NIL then
-    FScript.Free;
-  if FCatalog <> NIL then
-    FCatalog.Free;
+  DeleteCriticalSection(FLogCritSection);
+  FLogs.Free;
+  FScript.Free;
+  FCatalog.Free;
 
   OutputDebugString('Shutdown complete. See you!');
   inherited;
@@ -414,10 +400,17 @@ begin
     asm nop end;   // to catch Format %char errors in code.
   end;
 
-  FLogs.Log(Level, Msg, Fmt);
+  if FSettings.UseCriticalSections <> csNone then
+    EnterCriticalSection(FLogCritSection);
+  try
+    FLogs.Log(Level, Msg, Fmt);
 
-  if FPipe <> NIL then
-    FPipe.QueueLog(Level, Msg, Fmt);
+    if FPipe <> NIL then
+      FPipe.QueueLog(Level, Msg, Fmt);
+  finally
+    if FSettings.UseCriticalSections <> csNone then
+      LeaveCriticalSection(FLogCritSection);
+  end;
 end;
 
 procedure TAhHookLib.LowLevelLog(Level: TAhLogLevel; Msg: WideString; Fmt: array of const);
@@ -464,8 +457,7 @@ begin
       FreeAndNIL(FPipeThread);
     end;
 
-    if FPipe <> NIL then
-      FreeAndNIL(FPipe);
+    FreeAndNIL(FPipe);
   end;
 end;
 
@@ -519,10 +511,7 @@ begin
   try
     try
       Ini.LoadFromString(Catalog);
-
-      if FCatalog <> NIL then
-        FCatalog.Free;
-
+      FCatalog.Free;
       FCatalog := TAhApiCatalog.Create(Ini);
     except
       on E: Exception do
@@ -536,9 +525,7 @@ end;
 procedure TAhHookLib.CmdScript(const Script: WideString);
 begin
   Debug('Loading script & attaching handlers; Script (%d) = "%s"...', [Length(Script), Copy(Script, 1, 50)]);
-
-  if FScript <> NIL then
-    FScript.Free;
+  FScript.Free;
 
   try
     FScript := TAhScript.Create(Script);
@@ -575,10 +562,13 @@ end;
     F: TFileStream;
   begin
     //windows.Sleep(1);
-    exit;
-    f := tfilestreamw.Create('s.oo', fmopenread);
+//    exit;
+    f := tfilestreamw.Create('script.oo', fmopenread);
     while true do
+    begin
       readfile(f.Handle, buf[0], 5, i, nil);
+      sleep(10);
+    end;
     f.Free;
     //  halt
   end;
@@ -614,11 +604,10 @@ procedure Shutdown; stdcall;
 begin
   OutputDebugString('ApiHook Shutdown export procedure called.');
 
-  if App <> NIL then
-    try
-      FreeAndNIL(App);
-    except
-    end;
+  try
+    FreeAndNIL(App);
+  except
+  end;
 end;
 
 procedure PipeLoop; stdcall;
@@ -637,11 +626,10 @@ begin
   OutputDebugString(PChar( 'ApiHook DLL entry point, event = ' + IntToStr(Event) ));
 
   if Event = DLL_PROCESS_DETACH then
-    if App <> NIL then
-      try
-        FreeAndNIL(App);
-      except
-      end;
+    try
+      FreeAndNIL(App);
+    except
+    end;
 end;
 
 exports
@@ -650,6 +638,10 @@ exports
   PipeLoop;
 
 begin
+  // Need to enable explicitly even if TSingleThread (of pipe) turns it on
+  // because the pipe might not yet work while the host program may land on
+  // our hooks from several different threads.
+  IsMultiThread := True;
   DLLProc := DllEvent;
   DLLProc(DLL_PROCESS_ATTACH);
 end.
