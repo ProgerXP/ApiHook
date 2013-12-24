@@ -40,6 +40,11 @@ type
     FLogTimeFmt, FPreviousLog: WideString;
     FOutputCritSection: TRTLCriticalSection;
 
+    FDebugLoader: record
+      Enabled, Resume: Boolean;
+      Delay: Integer;
+    end;
+
     FArgs: record
       DLL, Script: WideString;
     end;
@@ -280,12 +285,33 @@ end;
 
 procedure TApiHookApp.AcquireOptions;
 var
-  NewCWD: WideString;
+  NewCWD, Debug: WideString;
 begin
   inherited;
 
   FLogTimeFmt := FCLParser.GetOrDefault('log-time', FLang['log time']);
   FLogLevel := GetLogLevelOpt('verbose');
+  Debug := FCLParser['debug-loader'];
+
+  if Debug <> '' then
+    with FDebugLoader do
+    begin
+      Resume := LowerCase(Debug[1]) = 'r';
+      Debug := TrimLeft(Debug, 'rR');
+
+      if Debug = '' then
+        Debug := '1';
+      if Debug[Length(Debug)] = 's' then
+        Debug := Copy(Debug, 1, Length(Debug) - 1) + '000';
+
+      Enabled := TryStrToInt(Debug, Delay) and (Delay > 0);
+
+      if Enabled then
+        if Delay = 1 then
+          Delay := 0  // manual, wait for Enter press.
+          else if Delay < 10 then
+            Delay := Delay * 1000;
+    end;
 
   if FCLParser.IsPassed('chdir') then
   begin
@@ -324,7 +350,7 @@ begin
   Version := AhVersion;
   Author := 'Proger_XP';
   WWW := AhHomePage;
-  BuildDate := $16122013;
+  BuildDate := $24122013;
 
   Help := FLang['help'];
   HelpDetails := FLang['help details'];
@@ -804,7 +830,7 @@ begin
     FLang.RaiseText('error: attach: OpenProcess', [SysErrorMsg]);
 
   try
-    if LowerCase(FCLParser['debug-loader']) = 'r' then
+    if FDebugLoader.Enabled and FDebugLoader.Resume then
       ResumeProc(Proc);
 
     Result := AllocAndLoadInto(Handle, DLL, LdrData);
@@ -816,23 +842,30 @@ end;
 function TApiHookApp.AllocAndLoadInto(Proc: THandle; const DLL: WideString;
   const Data: TLoaderData): Boolean;
 var
-  DebugLoader: Boolean;
   PData, PCode: Pointer;
   CodeSize, ID, Code: DWord;
   Thread: THandle;
   SysError: WideString;
 begin
-  DebugLoader := FCLParser.IsSwitchOn('debug-loader');
-
   PData := VAllocAndWriteTo(Proc, Data, SizeOf(Data));
   try
     CodeSize := DWord(@LoaderEnd) - DWord(@Loader);
     PCode := VAllocAndWriteTo(Proc, Loader, CodeSize);
 
-    if DebugLoader then
+    if FDebugLoader.Enabled then
     begin
       Log(logUser, 'log: --debug-loader', [DWord(PCode), DWord(PData)]);
-      ConsoleWaitForEnter;
+
+      if FDebugLoader.Delay > 0 then
+      begin
+        Log(logUser, 'log: --debug-loader delay', [FDebugLoader.Delay]);
+        Sleep(FDebugLoader.Delay);
+      end
+        else
+        begin
+          Log(logUser, 'log: --debug-loader enter', []);
+          ConsoleWaitForEnter;
+        end;
     end;
 
     try
@@ -840,7 +873,7 @@ begin
       if Thread = 0 then
         FLang.RaiseText('error: attach: CreateRemoteThread', [SysErrorMsg]);
 
-       if DebugLoader then
+       if FDebugLoader.Enabled then
         WaitForSingleObject(Thread, INFINITE)
         else if WaitForSingleObject(Thread, RemoteThreadTimeout) <> WAIT_OBJECT_0 then
           Error('error: attach: loader thread timeout', [RemoteThreadTimeout, SysErrorMsg]);
