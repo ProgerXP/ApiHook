@@ -7,7 +7,7 @@ uses Windows, SysUtils, Contnrs, CLasses, IniFilesW, StringsW, FileStreamW,
 
 type
   TRpnScalar = RPNit.TRpnScalar;
-  TAhLogLevel = (logDebug, logInfo, logUser, logError);  
+  TAhLogLevel = (logDebug, logInfo, logUser, logError);
   TAhCritSectionMode = (csNone, csPerProc, csGlobal);
 
   AhEx = class (Exception);
@@ -136,7 +136,7 @@ type
   end;
 
 const
-  AhVersion   = $0055;
+  AhVersion   = $0056;
   AhHomePage  = 'http://proger.i-forge.net/ApiHook';
 
   NilRPN      = '<NIL>';
@@ -149,6 +149,8 @@ const
 
   LogEOLN     = #13#10;
   LogPaths: array[0..4] of WideString = ('%TEMP%\', '%APPDATA%\', '\', 'C:\', 'D:\');
+
+function ToBool(Value: WideString): Boolean;
 
 function LogLevelToPrefix(Level: TAhLogLevel): WideString;
 function LogLevelToChar(Level: TAhLogLevel): Char;
@@ -167,6 +169,12 @@ procedure MakePortableFormat(Msg: WideString; Fmt: array of const;
   out NewMsg, NewFmt: WideString);
 
 implementation
+
+function ToBool(Value: WideString): Boolean;
+begin
+  Value := LowerCase(Value);
+  Result := (Value = '1') or (Value = 'on') or (Value = 'yes') or (Value = 'y') or (Value = 'true');
+end;
 
 function LogLevelToPrefix(Level: TAhLogLevel): WideString;
 const
@@ -338,7 +346,7 @@ begin
   NewMsg := NewMsg + Msg;
   Delete(NewFmt, 1, 1);
 end;
-                        
+
 { TAhInMemoryStream }
 
 constructor TAhInMemoryStream.Create(Start: Pointer; Size: Integer);

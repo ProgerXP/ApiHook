@@ -117,6 +117,9 @@ type
   TCdeclConv = class (TStdCallConv)
   public
     class function CallerCleansStack: Boolean; override;
+  end;     
+
+  TPointConv = class (TCdeclConv)
   end;
 
 { TAhApiCatalog }
@@ -253,8 +256,9 @@ end;
   begin
     Result := TApiProcInfo.Create;
 
-    Result.Lib := List.Values['Lib'];
-    Result.Call := List.Values['Call'];
+    { Required / with defaults }
+
+    Result.AnyCaller := ToBool( List.Values['AnyCaller'] );
 
     if List.IndexOfName('Addr') = -1 then
       Result.Addr := DWord(-1)
@@ -266,8 +270,12 @@ end;
     if not TryStrToInt(List.Values['Prologue'], Result.PrologueLength) then
       Result.PrologueLength := 0;
 
-    Result.Return := TApiParams.StrToKindHinting( List.Values['Return'], Result.ReturnHint );
-    Result.AnyCaller := TrimLeft(List.Values['AnyCaller'], '0 ') <> '';
+    { Optional }
+
+    Result.Lib := List.Values['Lib'];
+    Result.Call := List.Values['Call'];
+    if Result.Call <> 'point' then
+      Result.Return := TApiParams.StrToKindHinting( List.Values['Return'], Result.ReturnHint );
   end;
 
   function TAhApiCatalog.LoadParamsFrom(List: TStringsW; const Name: String = '???'): TApiParams;
@@ -460,4 +468,5 @@ end;
 initialization
   Classes.RegisterClass(TStdCallConv);
   Classes.RegisterClass(TCdeclConv);
+  Classes.RegisterClass(TPointConv);
 end.

@@ -14,8 +14,8 @@ type
 
   TAhRunPhase = (raPre, raPost);
   TAhRunPhases = set of TAhRunPhase;
-  THookMode = (hmPrologue, hmImport);   
-  TAhEndType = (FixedEnd, LengthEnd);
+  THookMode = (hmPrologue, hmImport, hmPoint);
+  TAhEndType = (etFixed, etLength);
 
   TAhGetRegister = function (Reg: String; out Value: DWord): Boolean of object;
   TAhGetArg = function (Arg: String): TRpnScalar of object;
@@ -180,6 +180,11 @@ type
   end;
 
   TLogAction = class (TAhAction)
+  protected
+    procedure Perform; override;
+  end;
+
+  TInt03Action = class (TAhAction)
   protected
     procedure Perform; override;
   end;
@@ -875,12 +880,6 @@ begin
 end;
 
 procedure TAhScript.HandleOption(const Line: WideString);
-  function ToBool(Value: WideString): Boolean;
-  begin
-    Value := LowerCase(Value);
-    Result := (Value = '1') or (Value = 'on') or (Value = 'yes') or (Value = 'y') or (Value = 'true');
-  end;
-
 var
   Key, Value: WideString;
 begin
@@ -903,7 +902,7 @@ var
     Result := True;
 
     case Char(FProcs.Strings[I][ Length(FProcs.Strings[I]) ]) of
-    '*':    (FProcs.Objects[I] as TAhScriptProc).HookMode := hmImport
+    '*':    (FProcs.Objects[I] as TAhScriptProc).HookMode := hmImport;
     else
       Result := False;
     end;
@@ -1151,7 +1150,7 @@ end;
 
 function TAhRangeAction.Parse(Args: WideString): TWideStringArray;
 const
-  Types: array[Boolean] of TAhEndType = (FixedEnd, LengthEnd);
+  Types: array[Boolean] of TAhEndType = (etFixed, etLength);
   Separators: array[TAhEndType] of WideString = ('--', '..');
 begin
   inherited Parse(Args);
@@ -1169,7 +1168,7 @@ begin
   AFrom := RpnValueToInt( Eval(FArgs[0]) );
   ATo   := RpnValueToInt( Eval(FArgs[1]) );
 
-  if FEndType = FixedEnd then
+  if FEndType = etFixed then
     if ATo < AFrom then
       Error('end address %.8X is less than start address %.8X', [ATo, AFrom])
       else
@@ -1188,6 +1187,13 @@ end;
 procedure TLogAction.Perform;
 begin
   Log(logUser, '%s', [ ExpandStr(FArgStr) ]);
+end;
+
+{ TInt03Action }
+
+procedure TInt03Action.Perform;
+asm
+  INT   03h
 end;
 
 { TSaveAction }
@@ -1372,7 +1378,8 @@ initialization
   SetRpnVarChars(RpnVarChars + '<>|&:^[]$');
   UnregisterDefaultRpnOperator('^', TRpnPower);
 
-  Classes.RegisterClass(TLogAction);
+  Classes.RegisterClass(TLogAction);      
+  Classes.RegisterClass(TInt03Action);
   Classes.RegisterClass(TSaveAction);
   Classes.RegisterClass(TDumpAction);
   Classes.RegisterClass(TIfAction);

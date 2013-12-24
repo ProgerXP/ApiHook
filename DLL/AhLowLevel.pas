@@ -116,7 +116,7 @@ const
 
                   {----------------  Debug ----------------}
 
-  {$IFDEF 0}
+  {$IFDEF WIN32}
     {INT    3 (debugger)}       $CD, $03,
   {$ELSE}
     {NOP, NOP}                  $90, $90,
@@ -295,6 +295,15 @@ begin
   end;
 end;
 
+// Landing point for hmPoint hooks, called instead of OrigAddr.
+procedure PointCall;
+asm
+  RET
+end;
+
+var
+  PointCallPtr: Pointer = @PointCall;
+
 procedure FillJumperOf(var Hook: TProcHook);
 begin
   with Hook do
@@ -306,13 +315,15 @@ begin
 
     Patch(Jumper[JumperTplContSlot], DWord(@Jumper[JumperTplContAt]));
 
-    if (Mode <> hmPrologue) or (PrologueLength = 0) then
-      Patch(Jumper[JumperTplOrig], DWord(@OrigAddr))   // they're @pointers to proc pointers.
-      else
-      begin
-        VarProloguePtr := @VarPrologue[0];
-        Patch(Jumper[JumperTplOrig], DWord(@VarProloguePtr));
-      end;
+    if Mode = hmPoint then
+      Patch(Jumper[JumperTplOrig], DWord(@PointCallPtr))
+      else if (Mode <> hmPrologue) or (PrologueLength = 0) then
+        Patch(Jumper[JumperTplOrig], DWord(@OrigAddr))   // they're @pointers to proc pointers.
+        else
+        begin
+          VarProloguePtr := @VarPrologue[0];
+          Patch(Jumper[JumperTplOrig], DWord(@VarProloguePtr));
+        end;
 
     Patch(Jumper[JumperTplPreHook], DWord(@PreHookAddr));
     Patch(Jumper[JumperTplPostHook], DWord(@PostHookAddr));
@@ -686,7 +697,7 @@ asm
 
   POP   ECX
   POP   EAX
-                         
+
   CALL  RestoreRegisters
   ADD   ESP, RegistersSize
   RET   4
@@ -710,7 +721,7 @@ asm
   LEA   EAX, [ESP + $10]
   PUSH  EAX
   CALL  DoPostHook
-  
+
   POP   ECX
   POP   EAX
 
@@ -938,7 +949,11 @@ begin
   begin
     Index := ProcHookCount;
     Proc := ProcName;
-    Mode := Script[ Script.IndexOfProc(ProcName) ].HookMode;
+    if LowerCase(Procs[ProcName].Call) = 'point' then
+      Mode := hmPoint
+    else
+      Mode := Script[ Script.IndexOfProc(ProcName) ].HookMode;
+
     PrologueLength := Procs[ProcName].PrologueLength;
     AnyCaller := Procs[ProcName].AnyCaller;
     OrigAddr := Addr;
@@ -948,10 +963,12 @@ begin
     if LLUseCritSect = csPerProc then
       InitializeCriticalSection(CritSection);
 
-    if Mode = hmPrologue then
-      Result := HookPrologueProc( ProcHooks[ProcHookCount] )
-      else
-        Result := HookImportProc( ProcHooks[ProcHookCount] );
+    case Mode of
+    hmPoint,
+    hmPrologue:   Result := HookPrologueProc( ProcHooks[ProcHookCount] );
+    hmImport:     Result := HookImportProc( ProcHooks[ProcHookCount] );
+    else          Result := not LLErr('Unknown hook Mode %d to HookProc.', [Byte(Mode)]);
+    end;
   end;
 
   if Result then
@@ -1049,10 +1066,12 @@ end;
 
 function UnhookProc(var Hook: TProcHook): Boolean;
 begin
-  if Hook.Mode = hmPrologue then
-    Result := UnhookPrologueProc(Hook)
-    else
-      Result := UnhookImportProc(Hook);
+  case Hook.Mode of
+  hmPoint,
+  hmPrologue:   Result := UnhookPrologueProc(Hook);
+  hmImport:     Result := UnhookImportProc(Hook);
+  else          Result := not LLErr('Unknown hook Mode %d to UnhookProc.', [Byte(Hook.Mode)]);
+  end;
 end;
 
 { Exports }
